@@ -101,7 +101,7 @@ function AppRoot() {
     if (appRef.current) return;
 
     const createdApp = new App(
-      { name: "pi-on-mcp-tool-cards", version: "0.3.0" },
+      { name: "devspace-tool-cards", version: "0.3.0" },
       {},
     );
     appRef.current = createdApp;

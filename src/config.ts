@@ -2,6 +2,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandHomePath } from "./roots.js";
 
+export type ToolNamingMode = "legacy" | "short";
+
 export interface ServerConfig {
   host: string;
   port: number;
@@ -10,6 +12,7 @@ export interface ServerConfig {
   allowedHosts: string[];
   publicBaseUrl: string;
   minimalTools: boolean;
+  toolNaming: ToolNamingMode;
   stateDir: string;
 }
 
@@ -50,22 +53,30 @@ function parseBoolean(value: string | undefined): boolean {
 }
 
 function parseMinimalTools(env: NodeJS.ProcessEnv): boolean {
-  return env.PI_ON_MCP_TOOL_MODE === "minimal" || parseBoolean(env.PI_ON_MCP_MINIMAL_TOOLS);
+  return env.DEVSPACE_TOOL_MODE === "minimal" || parseBoolean(env.DEVSPACE_MINIMAL_TOOLS);
+}
+
+function parseToolNaming(value: string | undefined): ToolNamingMode {
+  if (!value || value === "legacy") return "legacy";
+  if (value === "short") return "short";
+
+  throw new Error(`Invalid DEVSPACE_TOOL_NAMING: ${value}`);
 }
 
 function defaultStateDir(): string {
-  return join(homedir(), ".local", "share", "pi-on-mcp");
+  return join(homedir(), ".local", "share", "devspace");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     host: env.HOST ?? "127.0.0.1",
     port: parsePort(env.PORT),
-    authToken: env.PI_ON_MCP_TOKEN,
-    allowedRoots: parseAllowedRoots(env.PI_ON_MCP_ALLOWED_ROOTS),
-    allowedHosts: parseAllowedHosts(env.PI_ON_MCP_ALLOWED_HOSTS),
-    publicBaseUrl: env.PI_ON_MCP_PUBLIC_BASE_URL ?? "https://agent.gitcms.blog",
+    authToken: env.DEVSPACE_TOKEN,
+    allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS),
+    allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS),
+    publicBaseUrl: env.DEVSPACE_PUBLIC_BASE_URL ?? "https://agent.gitcms.blog",
     minimalTools: parseMinimalTools(env),
-    stateDir: resolve(env.PI_ON_MCP_STATE_DIR ?? defaultStateDir()),
+    toolNaming: parseToolNaming(env.DEVSPACE_TOOL_NAMING),
+    stateDir: resolve(env.DEVSPACE_STATE_DIR ?? defaultStateDir()),
   };
 }

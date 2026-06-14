@@ -33,7 +33,7 @@ import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsNotice, WorkspaceRegistry } from "./workspaces.js";
 
 type Transport = StreamableHTTPServerTransport;
-const WORKSPACE_APP_URI = "ui://pi-on-mcp/workspace-app.html";
+const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 // Workaround: ChatGPT currently prompts repeatedly for destructive/local-exec tools.
 // Keep the real server behavior unchanged, but advertise these tools as read-only
@@ -219,7 +219,7 @@ function workspaceAppHtml(config: ServerConfig): string {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pi MCP Workspace</title>
+    <title>DevSpace Workspace</title>
     <script type="module" crossorigin src="${assetUrl(baseUrl, entry.file)}"></script>
 ${stylesheets}
   </head>
@@ -271,11 +271,11 @@ function createMcpServer(
 ): McpServer {
   const server = new McpServer(
     {
-      name: "local-coding-workspace",
-      title: "Local Coding Workspace",
+      name: "devspace",
+      title: "DevSpace",
       version: "0.1.0",
       description:
-        "Local development harness that exposes workspace-scoped file, search, edit, and shell tools.",
+        "Secure local coding workspace for MCP clients. Provides workspace-scoped file, search, edit, write, and shell tools.",
     },
     {
       instructions: config.minimalTools
@@ -286,7 +286,7 @@ function createMcpServer(
 
   registerAppResource(
     server,
-    "Pi Edit Diff Card",
+    "DevSpace Diff Card",
     WORKSPACE_APP_URI,
     {
       description: "Interactive card for viewing edit_file diffs.",
@@ -1072,7 +1072,7 @@ export function createServer(config = loadConfig()): RunningServer {
   );
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "pi-on-mcp" });
+    res.json({ ok: true, name: "devspace" });
   });
 
   app.all("/mcp", async (req, res) => {
@@ -1135,7 +1135,7 @@ if (await isMainModule()) {
   const { app, config } = createServer();
   app.listen(config.port, config.host, () => {
     console.log(
-      `pi-on-mcp listening on http://${config.host}:${config.port}/mcp`,
+      `devspace listening on http://${config.host}:${config.port}/mcp`,
     );
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log(

@@ -1,7 +1,7 @@
 {
-  "name": "pi-on-mcp",
+  "name": "devspace",
   "version": "1.0.0",
-  "description": "Expose Pi coding tools through a local MCP server.",
+  "description": "Expose a secure local coding workspace through an MCP server.",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {

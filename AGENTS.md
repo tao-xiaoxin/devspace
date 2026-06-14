@@ -1,15 +1,15 @@
-# pi-on-mcp
+# DevSpace
 
-This project is an experiment to expose a local development harness over MCP so
-ChatGPT, Claude, or another MCP-capable host can operate directly on this
-machine's development environment.
+This project exposes a local development workspace over MCP so ChatGPT, Claude,
+or another MCP-capable host can operate directly on this machine's approved
+development directories.
 
 The goal is not to delegate work to a separate local coding agent. The MCP host
 should call tools that read files, edit files, search code, and run shell
 commands directly against approved local project roots.
 
-Pi's SDK is being evaluated as the backend for mature local coding primitives
-such as read, edit, write, grep, find, ls, and bash. The MCP server should wrap
+Pi's SDK is currently used as the backend adapter for mature local coding
+primitives such as read, edit, write, grep, find, ls, and bash. DevSpace wraps
 those primitives behind a remote Streamable HTTP MCP interface, suitable for use
 through a Cloudflare Tunnel.
 

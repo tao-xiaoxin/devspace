@@ -14,7 +14,7 @@ export interface DatabaseHandle {
 }
 
 export function databasePath(stateDir: string): string {
-  return join(stateDir, "pi-on-mcp.sqlite");
+  return join(stateDir, "devspace.sqlite");
 }
 
 export function openDatabase(stateDir: string): DatabaseHandle {
