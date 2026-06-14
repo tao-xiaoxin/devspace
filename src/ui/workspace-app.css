@@ -185,27 +185,14 @@ body {
 
 .review-summary {
   display: grid;
-  gap: 8px;
   padding: 0 14px 12px;
 }
 
-.review-headline {
-  color: var(--color-text-primary, #f5f5f6);
-  font-size: var(--font-text-sm-size, 13px);
-  font-weight: 600;
-}
-
-.review-statline,
 .review-actions,
 .review-diff-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.review-statline {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: var(--font-text-sm-size, 13px);
 }
 
 .review-file-list {
@@ -235,8 +222,15 @@ body {
   text-align: right;
 }
 
+.review-empty {
+  color: var(--color-text-secondary, #b7b7bf);
+  font-size: var(--font-text-sm-size, 13px);
+}
+
 .review-actions {
-  padding-top: 2px;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-primary, #3a3a40) 72%, transparent);
 }
 
 .review-action {
@@ -254,14 +248,6 @@ body {
 .review-action:hover {
   background: color-mix(in srgb, var(--color-background-tertiary, #333338) 80%, transparent);
   color: var(--color-text-primary, #f5f5f6);
-}
-
-.review-action.primary {
-  color: var(--color-text-primary, #f5f5f6);
-}
-
-.review-payload {
-  padding: 0;
 }
 
 .review-diff {

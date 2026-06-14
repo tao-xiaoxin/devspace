@@ -46,7 +46,6 @@ let hostContext: HostContext | undefined;
 let card: ToolResultCard | null = null;
 let expanded = false;
 let reviewFilesExpanded = false;
-let reviewPayloadOpen = false;
 let errorMessage: string | null = null;
 let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
@@ -81,7 +80,6 @@ async function boot(): Promise<void> {
       card = null;
       expanded = false;
       reviewFilesExpanded = false;
-      reviewPayloadOpen = false;
       errorMessage = "No result card is available for this tool result.";
       render();
       return;
@@ -90,7 +88,6 @@ async function boot(): Promise<void> {
     card = { ...structured, tool };
     expanded = false;
     reviewFilesExpanded = false;
-    reviewPayloadOpen = false;
     errorMessage = null;
     render();
   };
@@ -218,7 +215,7 @@ function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
 }
 
 async function renderPayloadIfNeeded(): Promise<void> {
-  if ((!expanded && !reviewPayloadOpen) || !card || !currentPayloadContainer) return;
+  if (!expanded || !card || !currentPayloadContainer) return;
 
   const target = currentPayloadContainer;
 
@@ -244,25 +241,6 @@ async function renderPayloadIfNeeded(): Promise<void> {
     if (target !== currentPayloadContainer || !expanded || !card) return;
 
     currentPayload = mountHeavyPayload(target, {
-      card,
-      hostContext,
-      errorMessage,
-    });
-    return;
-  }
-
-  if (isReviewTool(card.tool)) {
-    if (currentPayload) {
-      currentPayload.update({ card, hostContext, errorMessage });
-      return;
-    }
-
-    renderStatus(target, "Loading review...");
-
-    const { mountReviewPayload } = await import("./review-payload.js");
-    if (target !== currentPayloadContainer || !reviewPayloadOpen || !card) return;
-
-    currentPayload = mountReviewPayload(target, {
       card,
       hostContext,
       errorMessage,
@@ -370,20 +348,6 @@ function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
   header.append(icon, titleGroup, renderSummaryBadge(card));
 
   const body = element("div", { className: "review-summary" });
-  const fileCount = Number(summary.files ?? files.length);
-  body.append(
-    element("div", {
-      className: "review-headline",
-      text: fileCount === 0 ? "No changes" : `Changed ${fileCount} ${fileCount === 1 ? "file" : "files"}`,
-    }),
-  );
-  const statLine = element("div", { className: "review-statline" });
-  statLine.append(
-    element("span", { className: "add", text: `+${String(summary.additions ?? 0)}` }),
-    element("span", { className: "remove", text: `-${String(summary.removals ?? 0)}` }),
-  );
-  body.append(statLine);
-
   const list = element("div", { className: "review-file-list" });
   for (const file of visibleFiles) {
     const row = element("div", { className: "review-file-row" });
@@ -393,6 +357,9 @@ function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
       element("span", { className: "review-file-stats remove", text: `-${String(file.removals ?? 0)}` }),
     );
     list.append(row);
+  }
+  if (files.length === 0) {
+    list.append(element("div", { className: "review-empty", text: "No file changes." }));
   }
   body.append(list);
 
@@ -410,30 +377,13 @@ function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
     actions.append(showMore);
   }
 
-  if (card.payload?.patch) {
-    const reviewButton = element("button", {
-      className: "review-action primary",
-      type: "button",
-      text: reviewPayloadOpen ? "Hide review" : "Review",
-    });
-    reviewButton.addEventListener("click", () => {
-      reviewPayloadOpen = !reviewPayloadOpen;
-      render();
-    });
-    actions.append(reviewButton);
-  }
-  body.append(actions);
-
   section.append(header, body);
-  if (reviewPayloadOpen) {
-    const payload = element("div", { className: "tool-body review-payload" });
-    currentPayloadContainer = payload;
-    section.append(payload);
+  if (actions.childElementCount > 0) {
+    section.append(actions);
   }
 
   main.append(section);
   appRoot.replaceChildren(main);
-  renderPayloadIfNeeded();
 }
 
 function renderChevron(isExpanded: boolean, visible: boolean): HTMLElement {
