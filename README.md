@@ -61,6 +61,21 @@ Call `open_workspace` before using the coding tools:
 ```
 
 Absolute paths such as `/home/waishnav/personal/my-project` are also supported.
+By default, DevSpace opens the actual checkout. For isolated parallel work in an
+existing Git repository, request a managed worktree:
+
+```json
+{
+  "path": "~/personal/my-project",
+  "mode": "worktree"
+}
+```
+
+Managed worktrees are created under `~/.devspace/worktrees` by default, with
+paths such as `~/.devspace/worktrees/my-project-a7f3c9d2`. Worktree mode requires
+an initialized Git repository with at least one commit. It does not copy
+uncommitted source checkout changes in the first version; the tool result notes
+when the source checkout was dirty.
 
 The result includes a `workspaceId`. Use that `workspaceId` for subsequent
 calls:
@@ -88,6 +103,7 @@ DEVSPACE_TOKEN="change-me" \
 DEVSPACE_ALLOWED_ROOTS="/home/waishnav/personal,/home/waishnav/work" \
 DEVSPACE_ALLOWED_HOSTS="localhost,127.0.0.1,agent.gitcms.blog" \
 DEVSPACE_PUBLIC_BASE_URL="https://agent.gitcms.blog" \
+DEVSPACE_WORKTREE_ROOT="/home/waishnav/.devspace/worktrees" \
 DEVSPACE_TOOL_MODE="full" \
 DEVSPACE_TOOL_NAMING="legacy" \
 npm run dev
@@ -105,6 +121,7 @@ env \
   DEVSPACE_ALLOWED_ROOTS="/home/waishnav/personal,/home/waishnav/work" \
   DEVSPACE_ALLOWED_HOSTS="localhost,127.0.0.1,agent.gitcms.blog" \
   DEVSPACE_PUBLIC_BASE_URL="https://agent.gitcms.blog" \
+  DEVSPACE_WORKTREE_ROOT="/home/waishnav/.devspace/worktrees" \
   DEVSPACE_TOOL_MODE="minimal" \
   DEVSPACE_TOOL_NAMING="short" \
   npm run release:start

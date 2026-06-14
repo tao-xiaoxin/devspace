@@ -24,6 +24,8 @@ try {
   assert.equal(loadedSession?.id, "ws_persistent");
   assert.equal(loadedSession?.root, "/tmp/project");
   assert.equal(loadedSession?.status, "active");
+  assert.equal(loadedSession?.mode, "checkout");
+  assert.equal(loadedSession?.managed, false);
 
   const loadedAgentFiles = secondStore.listLoadedAgentFiles(session.id);
   assert.equal(loadedAgentFiles.length, 1);

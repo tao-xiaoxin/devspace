@@ -1,11 +1,15 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { loadConfig } from "./config.js";
+import { GitWorktreeError } from "./git-worktrees.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsNotice, WorkspaceRegistry } from "./workspaces.js";
 
+const execFileAsync = promisify(execFile);
 const root = await mkdtemp(join(tmpdir(), "devspace-workspace-test-"));
 
 try {
@@ -16,16 +20,19 @@ try {
 
   const config = loadConfig({
     DEVSPACE_ALLOWED_ROOTS: root,
+    DEVSPACE_WORKTREE_ROOT: join(root, ".devspace", "worktrees"),
     PORT: "1",
   });
   const registry = new WorkspaceRegistry(config);
   const { workspace, agentsFiles } = await registry.openWorkspace(root);
 
+  assert.equal(workspace.mode, "checkout");
   assert.match(formatAgentsNotice(agentsFiles) ?? "", /root instructions/);
 
   const missingWorkspaceRoot = join(root, "missing", "workspace");
   const missingWorkspace = await registry.openWorkspace(missingWorkspaceRoot);
   assert.equal(missingWorkspace.workspace.root, missingWorkspaceRoot);
+  assert.equal(missingWorkspace.workspace.mode, "checkout");
   assert.equal((await stat(missingWorkspaceRoot)).isDirectory(), true);
 
   const rootAgain = await registry.loadAgentsForDirectory(workspace, root);
@@ -40,6 +47,40 @@ try {
   const nestedAgain = await registry.loadAgentsForPath(workspace, nestedPath);
   assert.equal(formatAgentsNotice(nestedAgain), undefined);
 
+  await assert.rejects(
+    () => registry.openWorkspace({ path: root, mode: "worktree" }),
+    (error: unknown) =>
+      error instanceof GitWorktreeError && error.code === "GIT_REPOSITORY_NOT_FOUND",
+  );
+
+  const gitRoot = join(root, "git-project");
+  await mkdir(gitRoot);
+  await writeFile(join(gitRoot, "AGENTS.md"), "git root instructions\n");
+  await writeFile(join(gitRoot, "README.md"), "hello\n");
+  await git(gitRoot, ["init"]);
+  await git(gitRoot, ["config", "user.email", "devspace@example.com"]);
+  await git(gitRoot, ["config", "user.name", "DevSpace Test"]);
+  await git(gitRoot, ["add", "."]);
+  await git(gitRoot, ["commit", "-m", "Initial commit"]);
+  await writeFile(join(gitRoot, "dirty.txt"), "not copied\n");
+
+  const worktreeWorkspace = await registry.openWorkspace({
+    path: gitRoot,
+    mode: "worktree",
+  });
+  assert.equal(worktreeWorkspace.workspace.mode, "worktree");
+  assert.notEqual(worktreeWorkspace.workspace.root, gitRoot);
+  assert.match(worktreeWorkspace.workspace.root, /git-project-[a-f0-9]{8}$/);
+  assert.equal(worktreeWorkspace.workspace.sourceRoot, gitRoot);
+  assert.equal(worktreeWorkspace.workspace.worktree?.baseRef, "HEAD");
+  assert.equal(worktreeWorkspace.workspace.worktree?.dirtySource, true);
+  assert.equal(worktreeWorkspace.workspace.worktree?.managed, true);
+  assert.equal((await stat(worktreeWorkspace.workspace.root)).isDirectory(), true);
+  assert.match(formatAgentsNotice(worktreeWorkspace.agentsFiles) ?? "", /git root instructions/);
+
+  const worktreeReadmePath = registry.resolvePath(worktreeWorkspace.workspace, "README.md");
+  assert.equal(worktreeReadmePath.startsWith(worktreeWorkspace.workspace.root), true);
+
   const stateDir = join(root, ".state");
   const firstStore = new SqliteWorkspaceStore(stateDir);
   const persistentRegistry = new WorkspaceRegistry(config, firstStore);
@@ -52,12 +93,23 @@ try {
     persistentWorkspace.workspace,
     persistentNestedPath,
   );
+  const persistentWorktree = await persistentRegistry.openWorkspace({
+    path: gitRoot,
+    mode: "worktree",
+  });
   firstStore.close();
 
   const secondStore = new SqliteWorkspaceStore(stateDir);
   const restoredRegistry = new WorkspaceRegistry(config, secondStore);
   const restoredWorkspace = restoredRegistry.getWorkspace(persistentWorkspace.workspace.id);
   assert.equal(restoredWorkspace.root, root);
+  assert.equal(restoredWorkspace.mode, "checkout");
+
+  const restoredWorktree = restoredRegistry.getWorkspace(persistentWorktree.workspace.id);
+  assert.equal(restoredWorktree.mode, "worktree");
+  assert.equal(restoredWorktree.sourceRoot, gitRoot);
+  assert.equal(restoredWorktree.root, persistentWorktree.workspace.root);
+  assert.equal(restoredWorktree.worktree?.managed, true);
 
   const restoredRootAgents = await restoredRegistry.loadAgentsForDirectory(
     restoredWorkspace,
@@ -73,4 +125,8 @@ try {
   secondStore.close();
 } finally {
   await rm(root, { recursive: true, force: true });
+}
+
+async function git(cwd: string, args: string[]): Promise<void> {
+  await execFileAsync("git", args, { cwd });
 }
