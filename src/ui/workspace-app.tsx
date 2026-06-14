@@ -9,6 +9,7 @@ import {
   isEditTool,
   isExpandableCard,
   isReadTool,
+  isReviewTool,
   isSearchTool,
   isShellTool,
   isToolName,
@@ -44,6 +45,8 @@ let connectionError: string | null = null;
 let hostContext: HostContext | undefined;
 let card: ToolResultCard | null = null;
 let expanded = false;
+let reviewFilesExpanded = false;
+let reviewPayloadOpen = false;
 let errorMessage: string | null = null;
 let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
@@ -77,6 +80,8 @@ async function boot(): Promise<void> {
     if (!tool || !isToolResultCard(structured)) {
       card = null;
       expanded = false;
+      reviewFilesExpanded = false;
+      reviewPayloadOpen = false;
       errorMessage = "No result card is available for this tool result.";
       render();
       return;
@@ -84,6 +89,8 @@ async function boot(): Promise<void> {
 
     card = { ...structured, tool };
     expanded = false;
+    reviewFilesExpanded = false;
+    reviewPayloadOpen = false;
     errorMessage = null;
     render();
   };
@@ -151,6 +158,11 @@ function render(): void {
   }
 
   const display = getToolDisplay(card);
+  if (isReviewTool(card.tool)) {
+    renderReviewCard(card, display);
+    return;
+  }
+
   const expandable = isExpandableCard(card);
   const main = element("main", { className: "shell" });
   const section = element("section", { className: `tool-card ${display.tone}` });
@@ -206,7 +218,7 @@ function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
 }
 
 async function renderPayloadIfNeeded(): Promise<void> {
-  if (!expanded || !card || !currentPayloadContainer) return;
+  if ((!expanded && !reviewPayloadOpen) || !card || !currentPayloadContainer) return;
 
   const target = currentPayloadContainer;
 
@@ -227,6 +239,20 @@ async function renderPayloadIfNeeded(): Promise<void> {
     if (target !== currentPayloadContainer || !expanded || !card) return;
 
     currentPayload = mountHeavyPayload(target, {
+      card,
+      hostContext,
+      errorMessage,
+    });
+    return;
+  }
+
+  if (isReviewTool(card.tool)) {
+    renderStatus(target, "Loading review...");
+
+    const { mountReviewPayload } = await import("./review-payload.js");
+    if (target !== currentPayloadContainer || !reviewPayloadOpen || !card) return;
+
+    currentPayload = mountReviewPayload(target, {
       card,
       hostContext,
       errorMessage,
@@ -274,6 +300,16 @@ function renderPrePayload(
 function renderSummaryBadge(card: ToolResultCard): HTMLElement {
   const summary = card.summary ?? {};
 
+  if (isReviewTool(card.tool)) {
+    const stats = element("span", { className: "stats" });
+    stats.setAttribute("aria-label", "Review diff statistics");
+    stats.append(
+      element("span", { className: "add", text: `+${String(summary.additions ?? 0)}` }),
+      element("span", { className: "remove", text: `-${String(summary.removals ?? 0)}` }),
+    );
+    return stats;
+  }
+
   if (isEditTool(card.tool) || isWriteTool(card.tool)) {
     const stats = element("span", { className: "stats" });
     stats.setAttribute("aria-label", "Diff statistics");
@@ -296,6 +332,93 @@ function renderSummaryBadge(card: ToolResultCard): HTMLElement {
   }
 
   return element("span", { className: "badge", text: `${String(summary.lines ?? 0)} lines` });
+}
+
+function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
+  unmountPayload();
+
+  const files = card.files ?? [];
+  const summary = card.summary ?? {};
+  const visibleFiles = reviewFilesExpanded ? files : files.slice(0, 3);
+  const hiddenCount = Math.max(0, files.length - visibleFiles.length);
+  const main = element("main", { className: "shell" });
+  const section = element("section", { className: "tool-card review" });
+  const header = element("div", { className: "review-header" });
+  const icon = element("span", { className: "tool-icon", ariaHidden: "true" });
+  icon.innerHTML = display.icon;
+  const titleGroup = element("div", { className: "review-title-group" });
+
+  titleGroup.append(
+    element("span", { className: "tool-title", text: display.title }),
+    element("span", { className: "tool-label", text: display.label, title: display.label }),
+  );
+  header.append(icon, titleGroup, renderSummaryBadge(card));
+
+  const body = element("div", { className: "review-summary" });
+  const fileCount = Number(summary.files ?? files.length);
+  body.append(
+    element("div", {
+      className: "review-headline",
+      text: fileCount === 0 ? "No changes" : `Changed ${fileCount} ${fileCount === 1 ? "file" : "files"}`,
+    }),
+  );
+  const statLine = element("div", { className: "review-statline" });
+  statLine.append(
+    element("span", { className: "add", text: `+${String(summary.additions ?? 0)}` }),
+    element("span", { className: "remove", text: `-${String(summary.removals ?? 0)}` }),
+  );
+  body.append(statLine);
+
+  const list = element("div", { className: "review-file-list" });
+  for (const file of visibleFiles) {
+    const row = element("div", { className: "review-file-row" });
+    row.append(
+      element("span", { className: "review-file-path", text: file.path ?? "unknown" }),
+      element("span", { className: "review-file-stats add", text: `+${String(file.additions ?? 0)}` }),
+      element("span", { className: "review-file-stats remove", text: `-${String(file.removals ?? 0)}` }),
+    );
+    list.append(row);
+  }
+  body.append(list);
+
+  const actions = element("div", { className: "review-actions" });
+  if (hiddenCount > 0) {
+    const showMore = element("button", {
+      className: "review-action",
+      type: "button",
+      text: `Show ${hiddenCount} more ${hiddenCount === 1 ? "file" : "files"}`,
+    });
+    showMore.addEventListener("click", () => {
+      reviewFilesExpanded = true;
+      render();
+    });
+    actions.append(showMore);
+  }
+
+  if (card.payload?.patch) {
+    const reviewButton = element("button", {
+      className: "review-action primary",
+      type: "button",
+      text: reviewPayloadOpen ? "Hide review" : "Review",
+    });
+    reviewButton.addEventListener("click", () => {
+      reviewPayloadOpen = !reviewPayloadOpen;
+      render();
+    });
+    actions.append(reviewButton);
+  }
+  body.append(actions);
+
+  section.append(header, body);
+  if (reviewPayloadOpen) {
+    const payload = element("div", { className: "tool-body review-payload" });
+    currentPayloadContainer = payload;
+    section.append(payload);
+  }
+
+  main.append(section);
+  appRoot.replaceChildren(main);
+  renderPayloadIfNeeded();
 }
 
 function renderChevron(isExpanded: boolean, visible: boolean): HTMLElement {
@@ -371,12 +494,18 @@ function getToolDisplay(card: ToolResultCard): ToolDisplay {
     case "run_shell":
     case "bash":
       return { icon: terminalIcon(), title: "Bash", label, tone: "shell" };
+    case "review_changes":
+      return { icon: reviewIcon(), title: "Review Changes", label, tone: "review" };
   }
 }
 
 function getToolLabel(card: ToolResultCard): string {
   if (isShellTool(card.tool)) {
     return String(card.summary?.command ?? card.path ?? card.tool);
+  }
+  if (isReviewTool(card.tool)) {
+    const count = Number(card.summary?.files ?? card.files?.length ?? 0);
+    return count === 0 ? "No changes since last review" : `${count} changed ${count === 1 ? "file" : "files"}`;
   }
   if (card.path) return card.path;
   if (card.root) return card.root;
@@ -462,4 +591,8 @@ function listIcon(): string {
 
 function terminalIcon(): string {
   return iconSvg('<path d="m5 7 5 5-5 5" /><path d="M12 17h7" />');
+}
+
+function reviewIcon(): string {
+  return iconSvg('<path d="M5 4h14v16H5z" /><path d="M8 8h8" /><path d="M8 12h5" /><path d="M8 16h7" />');
 }

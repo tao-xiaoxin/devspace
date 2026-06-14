@@ -9,6 +9,7 @@ export type ToolName =
   | "find_files"
   | "list_directory"
   | "run_shell"
+  | "review_changes"
   | "read"
   | "write"
   | "edit"
@@ -26,6 +27,13 @@ export interface ToolResultCard {
   root?: string;
   status?: string;
   summary?: Record<string, unknown>;
+  files?: Array<{
+    path?: string;
+    previousPath?: string;
+    type?: string;
+    additions?: number;
+    removals?: number;
+  }>;
   payload?: ToolPayload;
   agentsFiles?: Array<{
     path?: string;
@@ -66,6 +74,7 @@ export function isToolName(value: unknown): value is ToolName {
     value === "find_files" ||
     value === "list_directory" ||
     value === "run_shell" ||
+    value === "review_changes" ||
     value === "read" ||
     value === "write" ||
     value === "edit" ||
@@ -94,6 +103,10 @@ export function isSearchTool(tool: ToolName): boolean {
 
 export function isShellTool(tool: ToolName): boolean {
   return tool === "run_shell" || tool === "bash";
+}
+
+export function isReviewTool(tool: ToolName): boolean {
+  return tool === "review_changes";
 }
 
 export function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool"> {
@@ -132,6 +145,8 @@ export function isExpandableCard(card: ToolResultCard): boolean {
       Boolean(card.skillDiagnostics?.length)
     );
   }
+
+  if (isReviewTool(card.tool)) return Boolean(card.files?.length || card.payload?.patch);
 
   return Boolean(card.payload);
 }
