@@ -426,17 +426,39 @@ function createMcpServer(
     {
       title: "Open workspace",
       description:
-        "Open a local project directory as a coding workspace. This must be the first tool call before reading, editing, searching, writing, or running commands in a project. Returns a workspaceId and any AGENTS.md instructions discovered at the workspace root.",
+        "Open a local project directory as a coding workspace. This must be the first tool call before reading, editing, searching, writing, or running commands in a project. By default this opens the actual checkout; set mode=\"worktree\" when the user asks for an isolated or parallel coding session. Returns a workspaceId and any AGENTS.md instructions discovered at the workspace root.",
       inputSchema: {
         path: z
           .string()
           .describe(
             "Absolute path, or a leading-tilde home path such as ~/project, to a local project directory inside an allowed root.",
           ),
+        mode: z
+          .enum(["checkout", "worktree"])
+          .optional()
+          .describe(
+            "Defaults to checkout. Use checkout to work in the actual directory. Use worktree to create an isolated managed Git worktree for parallel work.",
+          ),
+        baseRef: z
+          .string()
+          .optional()
+          .describe("Git ref to base a worktree on. Only used with mode=\"worktree\". Defaults to HEAD."),
       },
       outputSchema: {
         workspaceId: z.string(),
         root: z.string(),
+        mode: z.enum(["checkout", "worktree"]),
+        sourceRoot: z.string().optional(),
+        worktree: z
+          .object({
+            path: z.string(),
+            baseRef: z.string(),
+            baseSha: z.string(),
+            dirtySource: z.boolean(),
+            detached: z.boolean(),
+            managed: z.boolean(),
+          })
+          .optional(),
         summary: z.object({
           agentsFiles: z.number().int().nonnegative(),
         }),
@@ -450,8 +472,8 @@ function createMcpServer(
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ path }) => {
-      const { workspace, agentsFiles } = await workspaces.openWorkspace(path);
+    async ({ path, mode, baseRef }) => {
+      const { workspace, agentsFiles } = await workspaces.openWorkspace({ path, mode, baseRef });
       const summary = {
         agentsFiles: agentsFiles.length,
       };
@@ -478,6 +500,9 @@ function createMcpServer(
             {
               workspaceId: workspace.id,
               root: workspace.root,
+              mode: workspace.mode,
+              sourceRoot: workspace.sourceRoot,
+              worktree: workspace.worktree,
               loadedAgentsFiles: agentsFiles.map((file) => ({
                 path: file.path,
                 alreadyLoaded: file.alreadyLoaded,
@@ -505,6 +530,9 @@ function createMcpServer(
         structuredContent: {
           workspaceId: workspace.id,
           root: workspace.root,
+          mode: workspace.mode,
+          sourceRoot: workspace.sourceRoot,
+          worktree: workspace.worktree,
           summary,
           result: contentText(resultContent),
         },
