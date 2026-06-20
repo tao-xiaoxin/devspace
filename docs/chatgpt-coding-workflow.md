@@ -81,8 +81,11 @@ Skills are enabled by default for coding-agent workflows.
 
 DevSpace discovers skills from:
 
+- built-in DevSpace skills in `skills/core`
+- workspace-local skills in `skills/local`
+- workspace-installed skills in `skills/installed`
 - `DEVSPACE_AGENT_DIR`, which defaults to `~/.codex`
-- project `.pi/skills`
+- legacy project `.pi/skills`
 - optional paths from `DEVSPACE_SKILL_PATHS`
 
 When `open_workspace` returns matching skills, the model should read the
@@ -94,6 +97,8 @@ Skill paths may be outside the workspace. DevSpace only permits reading:
 - files under a skill directory after that skill's `SKILL.md` has been read
 
 Set `DEVSPACE_SKILLS=0` to hide skills from workspace output.
+
+The built-in skill layout is inspired by [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills) under the MIT license, with DevSpace-specific adaptations for MCP workflow commands and local coding tasks.
 
 ## Tool Names
 

@@ -98,6 +98,9 @@ DevSpace gives ChatGPT tools to:
 - discover local agent skills from your skill folders
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
 
+DevSpace also bundles a small set of built-in workflow and engineering skills in `skills/core/`.
+Their structure is inspired by [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills), which is released under the MIT license.
+
 ## Mental Model
 
 DevSpace is remote access to selected local folders.

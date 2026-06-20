@@ -46,6 +46,7 @@ import { contentStats, contentText, toolError, type ToolContent } from "./tool-r
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import { serverInstructions as buildServerInstructions, workspaceInstruction } from "./prompting.js";
+import { parseAnswerTextOrThrow, parseWorkspaceCommand } from "./workspace-commands.js";
 import type {
   WorkspaceStore,
   WorkspacePlanStep,
@@ -764,6 +765,187 @@ function createMcpServer(
 
   registerAppTool(
     server,
+    "handle_workspace_command",
+    {
+      title: "Handle workspace command",
+      description:
+        "Interpret concise workflow messages such as /plan, /goal, and compact answers for the current workspace.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        message: z.string().describe("Raw user message, such as /plan fix this, /goal ship this, or 1B, 2A."),
+      },
+      outputSchema: {
+        result: z.string(),
+        recognized: z.boolean(),
+        command: z.enum(["plan", "goal", "answer", "none"]),
+        mode: z.enum(["default", "plan"]).optional(),
+        goal: z
+          .object({
+            objective: z.string(),
+            status: z.enum(["active", "complete", "blocked"]),
+            tokenBudget: z.number().int().positive().optional(),
+            createdAt: z.string(),
+            updatedAt: z.string(),
+            timeUsedSeconds: z.number().int().nonnegative(),
+            completedAt: z.string().optional(),
+            blockedAt: z.string().optional(),
+          })
+          .optional(),
+        prompt: userInputPromptOutputSchema.optional(),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, message }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const pending = workspaceStore.getPendingUserInput(workspaceId);
+      const parsed = parseWorkspaceCommand(message, pending);
+
+      if (!parsed.recognized || parsed.kind === "none") {
+        const content = [textBlock("No workflow command recognized.")];
+        logToolCall(config, {
+          tool: "handle_workspace_command",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            recognized: false,
+            command: "none" as const,
+          },
+        };
+      }
+
+      if (parsed.kind === "plan") {
+        const collaboration = workspaceStore.setCollaborationMode({
+          workspaceSessionId: workspaceId,
+          mode: "plan",
+        });
+        const content = [textBlock(parsed.argument ? `Plan mode on\n${parsed.argument}` : "Plan mode on")];
+        logToolCall(config, {
+          tool: "handle_workspace_command",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            recognized: true,
+            command: "plan" as const,
+            mode: collaboration.mode,
+          },
+        };
+      }
+
+      if (parsed.kind === "goal") {
+        if (!parsed.argument) {
+          const response = toolError("Goal command is missing an objective.");
+          logFailedToolResponse(config, {
+            tool: "handle_workspace_command",
+            workspaceId,
+          }, response.content, startedAt);
+          return response;
+        }
+
+        const goal = workspaceStore.saveGoal({
+          workspaceSessionId: workspaceId,
+          objective: parsed.argument,
+        });
+        const content = [textBlock("Goal created")];
+        logToolCall(config, {
+          tool: "handle_workspace_command",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            recognized: true,
+            command: "goal" as const,
+            goal: {
+              objective: goal.objective,
+              status: goal.status,
+              tokenBudget: goal.tokenBudget,
+              createdAt: goal.createdAt,
+              updatedAt: goal.updatedAt,
+              timeUsedSeconds: goal.timeUsedSeconds,
+              completedAt: goal.completedAt,
+              blockedAt: goal.blockedAt,
+            },
+          },
+        };
+      }
+
+      if (!pending) {
+        const response = toolError("No pending user-input request exists for this workspace.");
+        logFailedToolResponse(config, {
+          tool: "handle_workspace_command",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+
+      if (parsed.error) {
+        const response = toolError(parsed.error);
+        logFailedToolResponse(config, {
+          tool: "handle_workspace_command",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+
+      const answers = parsed.answers ?? [];
+      validateSubmittedAnswers(pending, answers);
+      const summary = summarizeSubmittedAnswers(pending, answers);
+      const completed = workspaceStore.completeUserInput({
+        workspaceSessionId: workspaceId,
+        answers,
+        summary,
+        source: "tool",
+      });
+      const content = [textBlock("Answer recorded")];
+
+      logToolCall(config, {
+        tool: "handle_workspace_command",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        _meta: {
+          tool: "answer_user_input",
+          card: {
+            workspaceId,
+            status: completed.status,
+            summary: {
+              answered: completed.response?.answers.length ?? 0,
+            },
+            payload: { content },
+            userInput: toStructuredUserInputRecord(completed),
+          },
+        },
+        structuredContent: {
+          result: contentText(content),
+          recognized: true,
+          command: "answer" as const,
+          prompt: toStructuredUserInputRecord(completed),
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
     "request_user_input",
     {
       title: "Request user input",
@@ -874,7 +1056,7 @@ function createMcpServer(
       const content = [
         textBlock(
           delivery === "pending_fallback"
-            ? `${formatUserInputPrompt(record.questions, record.autoResolutionMs)}\nSubmit answers with answer_user_input or the inline card.`
+            ? `${formatUserInputPrompt(record.questions, record.autoResolutionMs)}\nReply with answers or use the card.`
             : formatUserInputRecordResult(record),
         ),
       ];
@@ -955,6 +1137,7 @@ function createMcpServer(
       inputSchema: {
         workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
         source: z.enum(["tool", "ui"]).optional(),
+        text: z.string().optional(),
         answers: z.array(
           z.object({
             questionId: z.string(),
@@ -975,7 +1158,7 @@ function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "plan"),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ workspaceId, answers, source }) => {
+    async ({ workspaceId, answers, text, source }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
       const pending = workspaceStore.getPendingUserInput(workspaceId);
@@ -988,15 +1171,16 @@ function createMcpServer(
         return response;
       }
 
-      validateSubmittedAnswers(pending, answers);
-      const summary = summarizeSubmittedAnswers(pending, answers);
+      const submittedAnswers = text ? parseAnswerTextOrThrow(pending, text) : answers;
+      validateSubmittedAnswers(pending, submittedAnswers);
+      const summary = summarizeSubmittedAnswers(pending, submittedAnswers);
       const completed = workspaceStore.completeUserInput({
         workspaceSessionId: workspaceId,
-        answers,
+        answers: submittedAnswers,
         summary,
         source: source ?? "tool",
       });
-      const content = [textBlock(formatUserInputRecordResult(completed))];
+      const content = [textBlock("Answer recorded")];
 
       logToolCall(config, {
         tool: "answer_user_input",
@@ -2286,8 +2470,6 @@ function formatGoalResult(goal: {
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
     goal.tokenBudget !== undefined ? `Token budget: ${goal.tokenBudget}` : undefined,
-    `Created: ${goal.createdAt}`,
-    `Updated: ${goal.updatedAt}`,
     `Time used seconds: ${goal.timeUsedSeconds}`,
     goal.completedAt ? `Completed: ${goal.completedAt}` : undefined,
     goal.blockedAt ? `Blocked: ${goal.blockedAt}` : undefined,

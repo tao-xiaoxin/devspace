@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { resolve, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   loadSkills,
   type Skill,
@@ -22,12 +23,46 @@ export interface SkillReadResolution {
 export function loadWorkspaceSkills(config: ServerConfig, cwd: string): LoadedSkills {
   if (!config.skillsEnabled) return { skills: [], diagnostics: [] };
 
-  return loadSkills({
-    cwd,
-    agentDir: config.agentDir,
-    skillPaths: config.skillPaths,
-    includeDefaults: true,
-  });
+  const batches = [
+    loadSkills({
+      cwd,
+      agentDir: config.agentDir,
+      skillPaths: [workspaceLocalSkillPath(cwd)],
+      includeDefaults: false,
+    }),
+    loadSkills({
+      cwd,
+      agentDir: config.agentDir,
+      skillPaths: [workspaceInstalledSkillPath(cwd)],
+      includeDefaults: false,
+    }),
+    loadSkills({
+      cwd,
+      agentDir: config.agentDir,
+      skillPaths: [bundledSkillPath()],
+      includeDefaults: false,
+    }),
+    loadSkills({
+      cwd,
+      agentDir: config.agentDir,
+      skillPaths: [workspaceLegacySkillPath(cwd)],
+      includeDefaults: false,
+    }),
+    loadSkills({
+      cwd,
+      agentDir: config.agentDir,
+      skillPaths: [],
+      includeDefaults: true,
+    }),
+    loadSkills({
+      cwd,
+      agentDir: config.agentDir,
+      skillPaths: config.skillPaths,
+      includeDefaults: false,
+    }),
+  ];
+
+  return mergeLoadedSkills(batches);
 }
 
 export function resolveSkillReadPath(
@@ -72,4 +107,53 @@ export function formatPathForPrompt(path: string): string {
   }
 
   return resolvedPath.split(sep).join("/");
+}
+
+function bundledSkillPath(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "skills", "core");
+}
+
+function workspaceLocalSkillPath(cwd: string): string {
+  return resolve(cwd, "skills", "local");
+}
+
+function workspaceInstalledSkillPath(cwd: string): string {
+  return resolve(cwd, "skills", "installed");
+}
+
+function workspaceLegacySkillPath(cwd: string): string {
+  return resolve(cwd, ".pi", "skills");
+}
+
+function mergeLoadedSkills(batches: LoadedSkills[]): LoadedSkills {
+  const winners = new Map<string, Skill>();
+  const diagnostics: LoadSkillsResult["diagnostics"] = [];
+
+  for (const batch of batches) {
+    diagnostics.push(...batch.diagnostics);
+    for (const skill of batch.skills) {
+      const existing = winners.get(skill.name);
+      if (!existing) {
+        winners.set(skill.name, skill);
+        continue;
+      }
+
+      diagnostics.push({
+        type: "collision",
+        message: `name "${skill.name}" collision`,
+        path: skill.filePath,
+        collision: {
+          resourceType: "skill",
+          name: skill.name,
+          winnerPath: existing.filePath,
+          loserPath: skill.filePath,
+        },
+      });
+    }
+  }
+
+  return {
+    skills: Array.from(winners.values()),
+    diagnostics,
+  };
 }
