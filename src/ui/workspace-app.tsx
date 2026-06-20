@@ -230,6 +230,36 @@ async function renderPayloadIfNeeded(): Promise<void> {
     return;
   }
 
+  if (shouldUseUserInputPayload(card)) {
+    if (currentPayload) {
+      currentPayload.update({ card, hostContext, errorMessage });
+      return;
+    }
+
+    renderStatus(target, "Loading question flow...");
+
+    const { mountUserInputPayload } = await import("./user-input-payload.js");
+    if (target !== currentPayloadContainer || !expanded || !card) return;
+
+    currentPayload = mountUserInputPayload(target, {
+      card,
+      hostContext,
+      errorMessage,
+      submitAnswers: async ({ workspaceId, answers }) => {
+        if (!app) throw new Error("Host app is not connected.");
+        await app.callServerTool({
+          name: "answer_user_input",
+          arguments: {
+            workspaceId,
+            source: "ui",
+            answers,
+          },
+        });
+      },
+    });
+    return;
+  }
+
   if (shouldUseHeavyPayload(card)) {
     if (currentPayload) {
       currentPayload.update({ card, hostContext, errorMessage });
@@ -284,6 +314,16 @@ async function renderPayloadIfNeeded(): Promise<void> {
 
 function shouldUseHeavyPayload(card: ToolResultCard): boolean {
   return isReadTool(card.tool) || isEditTool(card.tool) || isWriteTool(card.tool);
+}
+
+function shouldUseUserInputPayload(card: ToolResultCard): boolean {
+  return (
+    (card.tool === "request_user_input" ||
+      card.tool === "get_pending_user_input" ||
+      card.tool === "answer_user_input" ||
+      card.tool === "list_user_input_history") &&
+    Boolean(card.userInput)
+  );
 }
 
 function unmountPayload(): void {
@@ -362,6 +402,10 @@ function renderSummaryBadge(card: ToolResultCard): HTMLElement {
 
   if (isSearchTool(card.tool)) {
     return element("span", { className: "badge", text: `${String(summary.lines ?? 0)} lines` });
+  }
+
+  if (card.userInput?.status) {
+    return element("span", { className: "badge", text: card.userInput.status });
   }
 
   return element("span", { className: "badge", text: `${String(summary.lines ?? 0)} lines` });
@@ -466,6 +510,14 @@ function getToolDisplay(card: ToolResultCard): ToolDisplay {
   switch (card.tool) {
     case "open_workspace":
       return { icon: folderIcon(), title: "Workspace", label, tone: "workspace" };
+    case "request_user_input":
+      return { icon: questionIcon(), title: "Request User Input", label, tone: "directory" };
+    case "get_pending_user_input":
+      return { icon: questionIcon(), title: "Pending User Input", label, tone: "directory" };
+    case "answer_user_input":
+      return { icon: answeredIcon(), title: "Answered User Input", label, tone: "directory" };
+    case "list_user_input_history":
+      return { icon: filesIcon(), title: "User Input History", label, tone: "directory" };
     case "read_file":
     case "read":
       return { icon: fileIcon(), title: "Read File", label, tone: "read" };
@@ -504,6 +556,9 @@ function getToolLabel(card: ToolResultCard): string {
   if (card.root) return card.root;
   if (isSearchTool(card.tool)) {
     return String(card.summary?.pattern ?? card.tool);
+  }
+  if (card.userInput?.status) {
+    return `status: ${card.userInput.status}`;
   }
 
   return card.tool;
@@ -580,6 +635,14 @@ function filesIcon(): string {
 
 function checkCircleIcon(): string {
   return '<svg aria-hidden="true" class="badge-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="8" cy="8" r="6" /><path d="m5.5 8 1.7 1.7 3.4-3.5" /></svg>';
+}
+
+function questionIcon(): string {
+  return iconSvg('<path d="M9.09 9a3 3 0 1 1 5.82 1c0 2-3 3-3 3" /><path d="M12 17h.01" /><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />');
+}
+
+function answeredIcon(): string {
+  return iconSvg('<path d="m8 12 2.5 2.5L16 9" /><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />');
 }
 
 function listIcon(): string {

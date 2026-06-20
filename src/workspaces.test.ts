@@ -90,6 +90,53 @@ try {
     path: gitRoot,
     mode: "worktree",
   });
+  const savedPlan = firstStore.savePlan({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    explanation: "Track work in small steps",
+    steps: [
+      { step: "Inspect repo", status: "completed" },
+      { step: "Implement plan tools", status: "in_progress" },
+      { step: "Run tests", status: "pending" },
+    ],
+  });
+  assert.equal(savedPlan.steps.length, 3);
+  const savedMode = firstStore.setCollaborationMode({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    mode: "plan",
+  });
+  assert.equal(savedMode.mode, "plan");
+  const savedPrompt = firstStore.createUserInputRequest({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    questions: [
+      {
+        header: "Mode",
+        id: "mode_choice",
+        question: "Which implementation mode should we use?",
+        options: [
+          { label: "Strict", description: "Closer to Codex semantics" },
+          { label: "Loose", description: "More permissive for compatibility" },
+        ],
+      },
+    ],
+    autoResolutionMs: 60000,
+  });
+  assert.equal(savedPrompt.status, "pending");
+  const savedGoal = firstStore.saveGoal({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    objective: "Ship Codex-style planning support",
+    tokenBudget: 1200,
+  });
+  assert.equal(savedGoal.status, "active");
+  const blockedGoal = firstStore.updateGoalStatus({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    status: "blocked",
+  });
+  assert.equal(blockedGoal.status, "blocked");
+  const restartedGoal = firstStore.saveGoal({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    objective: "Retry Codex-style planning support",
+  });
+  assert.equal(restartedGoal.status, "active");
   firstStore.close();
 
   const secondStore = new SqliteWorkspaceStore(stateDir);
@@ -97,6 +144,32 @@ try {
   const restoredWorkspace = restoredRegistry.getWorkspace(persistentWorkspace.workspace.id);
   assert.equal(restoredWorkspace.root, root);
   assert.equal(restoredWorkspace.mode, "checkout");
+  const restoredPlan = secondStore.getPlan(persistentWorkspace.workspace.id);
+  assert.equal(restoredPlan?.explanation, "Track work in small steps");
+  assert.equal(restoredPlan?.steps[1]?.status, "in_progress");
+  const restoredMode = secondStore.getCollaborationMode(persistentWorkspace.workspace.id);
+  assert.equal(restoredMode.mode, "plan");
+  const restoredPrompt = secondStore.getPendingUserInput(persistentWorkspace.workspace.id);
+  assert.equal(restoredPrompt?.questions[0]?.id, "mode_choice");
+  assert.equal(restoredPrompt?.autoResolutionMs, 60000);
+  const restoredGoal = secondStore.getGoal(persistentWorkspace.workspace.id);
+  assert.equal(restoredGoal?.objective, "Retry Codex-style planning support");
+  assert.equal(restoredGoal?.status, "active");
+  assert.equal(restoredGoal?.tokenBudget, undefined);
+  assert.equal(typeof restoredGoal?.timeUsedSeconds, "number");
+  assert.throws(
+    () =>
+      secondStore.saveGoal({
+        workspaceSessionId: persistentWorkspace.workspace.id,
+        objective: "Should fail while active goal exists",
+      }),
+    /An active goal already exists/,
+  );
+  const completedGoal = secondStore.updateGoalStatus({
+    workspaceSessionId: persistentWorkspace.workspace.id,
+    status: "complete",
+  });
+  assert.equal(completedGoal.status, "complete");
 
   const restoredWorktree = restoredRegistry.getWorkspace(persistentWorktree.workspace.id);
   assert.equal(restoredWorktree.mode, "worktree");

@@ -2,6 +2,10 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 
 export type ToolName =
   | "open_workspace"
+  | "request_user_input"
+  | "get_pending_user_input"
+  | "answer_user_input"
+  | "list_user_input_history"
   | "read_file"
   | "write_file"
   | "edit_file"
@@ -49,6 +53,32 @@ export interface ToolResultCard {
   }>;
   skillDiagnostics?: unknown[];
   instruction?: string;
+  userInput?: {
+    questions?: Array<{
+      header?: string;
+      id?: string;
+      question?: string;
+      options?: Array<{
+        label?: string;
+        description?: string;
+      }>;
+    }>;
+    autoResolutionMs?: number;
+    status?: string;
+    deliveryMode?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    answeredAt?: string;
+    response?: {
+      answers?: Array<{
+        questionId?: string;
+        label?: string;
+      }>;
+      summary?: string;
+      source?: string;
+      action?: string;
+    };
+  };
 }
 
 export interface ToolContent {
@@ -67,6 +97,10 @@ export interface ToolPayload {
 export function isToolName(value: unknown): value is ToolName {
   return (
     value === "open_workspace" ||
+    value === "request_user_input" ||
+    value === "get_pending_user_input" ||
+    value === "answer_user_input" ||
+    value === "list_user_input_history" ||
     value === "read_file" ||
     value === "write_file" ||
     value === "edit_file" ||

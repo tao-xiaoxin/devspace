@@ -45,6 +45,14 @@ import { formatPathForPrompt } from "./skills.js";
 import { contentStats, contentText, toolError, type ToolContent } from "./tool-result.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
+import { serverInstructions as buildServerInstructions, workspaceInstruction } from "./prompting.js";
+import type {
+  WorkspaceStore,
+  WorkspacePlanStep,
+  WorkspaceQuestion,
+  WorkspaceUserInputAnswer,
+  WorkspaceUserInputRecord,
+} from "./workspace-store.js";
 
 type Transport = StreamableHTTPServerTransport;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
@@ -88,6 +96,8 @@ interface DiffStats {
 
 type ToolWidgetKind =
   | "workspace"
+  | "plan"
+  | "goal"
   | "read"
   | "write"
   | "edit"
@@ -142,7 +152,7 @@ function toolWidgetDescriptorMeta(
   };
 }
 
-interface ToolNames {
+export interface ToolNames {
   openWorkspace: "open_workspace";
   read: "read_file" | "read";
   write: "write_file" | "write";
@@ -189,24 +199,6 @@ function toolNamesFor(config: ServerConfig): ToolNames {
       };
 }
 
-function serverInstructions(config: ServerConfig, toolNames: ToolNames): string {
-  const inspection = config.minimalTools
-    ? `In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use ${toolNames.shell} with command-line tools such as grep, rg, find, ls, and tree for search and directory inspection. `
-    : `Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. `;
-
-  const skills = config.skillsEnabled
-    ? `When ${toolNames.openWorkspace} returns available skills and a task matches a skill, use ${toolNames.read} to read that skill's path before proceeding. Skill paths may be outside the workspace, but ${toolNames.read} only permits advertised SKILL.md files and files under already-loaded skill directories. `
-    : "";
-
-  const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
-
-  const showChanges =
-    config.widgets === "changes"
-      ? " After creating, editing, or overwriting files, call show_changes once after the related file changes are complete so the user can see the aggregate diff."
-      : "";
-
-  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${showChanges}`;
-}
 function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   return {
     result: z
@@ -231,6 +223,41 @@ const workspaceAgentsFileOutputSchema = z.object({
 
 const workspaceAvailableAgentsFileOutputSchema = z.object({
   path: z.string(),
+});
+
+const userInputAnswerOutputSchema = z.object({
+  questionId: z.string(),
+  label: z.string(),
+});
+
+const userInputPromptOutputSchema = z.object({
+  questions: z.array(
+    z.object({
+      header: z.string(),
+      id: z.string(),
+      question: z.string(),
+      options: z.array(
+        z.object({
+          label: z.string(),
+          description: z.string(),
+        }),
+      ),
+    }),
+  ),
+  autoResolutionMs: z.number().int().min(60000).max(240000).optional(),
+  status: z.enum(["pending", "completed", "declined", "cancelled"]),
+  deliveryMode: z.enum(["elicitation", "tool", "ui"]).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  answeredAt: z.string().optional(),
+  response: z
+    .object({
+      answers: z.array(userInputAnswerOutputSchema),
+      summary: z.string(),
+      source: z.enum(["elicitation", "tool", "ui"]),
+      action: z.enum(["accept", "decline", "cancel"]),
+    })
+    .optional(),
 });
 
 const reviewFileOutputSchema = z.object({
@@ -452,6 +479,7 @@ function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   reviewCheckpoints: ReturnType<typeof createReviewCheckpointManager>,
+  workspaceStore: WorkspaceStore,
 ): McpServer {
   const toolNames = toolNamesFor(config);
   const server = new McpServer(
@@ -463,7 +491,14 @@ function createMcpServer(
         "Secure local coding workspace for MCP clients. Provides workspace-scoped file, search, edit, write, and shell tools.",
     },
     {
-      instructions: serverInstructions(config, toolNames),
+      instructions: buildServerInstructions(
+        {
+          minimalTools: config.minimalTools,
+          skillsEnabled: config.skillsEnabled,
+          widgetsChangesOnly: config.widgets === "changes",
+        },
+        toolNames,
+      ),
     },
   );
 
@@ -548,6 +583,7 @@ function createMcpServer(
         skills: z.array(workspaceSkillOutputSchema),
         skillDiagnostics: z.array(z.unknown()),
         instruction: z.string(),
+        collaborationMode: z.enum(["default", "plan"]),
       },
       ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
@@ -575,9 +611,8 @@ function createMcpServer(
       const availableAgentsFileOutputs = availableAgentsFiles.map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
       }));
-      const instruction = config.skillsEnabled
-        ? "Use this workspaceId in all subsequent tool calls for this project. Do not call open_workspace again for this same folder unless this workspaceId stops working, the user asks to reopen, or you switch to a different folder/worktree. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
-        : "Use this workspaceId in all subsequent tool calls for this project. Do not call open_workspace again for this same folder unless this workspaceId stops working, the user asks to reopen, or you switch to a different folder/worktree. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
+      const collaboration = workspaceStore.getCollaborationMode(workspace.id);
+      const instruction = workspaceInstruction(collaboration.mode, config.skillsEnabled);
       const resultContent: ToolContent[] = [
         {
           type: "text" as const,
@@ -633,6 +668,678 @@ function createMcpServer(
           skills: visibleSkills,
           skillDiagnostics: workspace.skillDiagnostics,
           instruction,
+          collaborationMode: collaboration.mode,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "get_collaboration_mode",
+    {
+      title: "Get collaboration mode",
+      description:
+        "Get the workspace collaboration mode. Use this to tell whether the workspace is in default execution mode or plan mode.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+      },
+      outputSchema: {
+        result: z.string(),
+        mode: z.enum(["default", "plan"]),
+        updatedAt: z.string().optional(),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const collaboration = workspaceStore.getCollaborationMode(workspaceId);
+      const content = [textBlock(`Workspace collaboration mode: ${collaboration.mode}`)];
+
+      logToolCall(config, {
+        tool: "get_collaboration_mode",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          mode: collaboration.mode,
+          updatedAt: collaboration.updatedAt || undefined,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "set_collaboration_mode",
+    {
+      title: "Set collaboration mode",
+      description:
+        "Set the workspace collaboration mode. Use plan mode when the task should stay in exploration and specification until the plan is complete.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        mode: z.enum(["default", "plan"]),
+      },
+      outputSchema: {
+        result: z.string(),
+        mode: z.enum(["default", "plan"]),
+        updatedAt: z.string(),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, mode }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const collaboration = workspaceStore.setCollaborationMode({
+        workspaceSessionId: workspaceId,
+        mode,
+      });
+      const content = [textBlock(`Workspace collaboration mode set to ${collaboration.mode}.`)];
+
+      logToolCall(config, {
+        tool: "set_collaboration_mode",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          mode: collaboration.mode,
+          updatedAt: collaboration.updatedAt,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "request_user_input",
+    {
+      title: "Request user input",
+      description:
+        "Store a structured user-input request for the current workspace. Use this primarily in plan mode when an implementation choice or product preference materially affects the plan.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        autoResolutionMs: z.number().int().min(60000).max(240000).optional(),
+        questions: z
+          .array(
+            z.object({
+              header: z.string(),
+              id: z.string(),
+              question: z.string(),
+              options: z
+                .array(
+                  z.object({
+                    label: z.string(),
+                    description: z.string(),
+                  }),
+                )
+                .min(2)
+                .max(3),
+            }),
+          )
+          .min(1)
+          .max(3),
+      },
+      outputSchema: {
+        result: z.string(),
+        status: z.enum(["pending", "completed", "declined", "cancelled"]),
+        delivery: z.enum([
+          "elicitation_completed",
+          "elicitation_declined",
+          "elicitation_cancelled",
+          "pending_fallback",
+        ]),
+        prompt: userInputPromptOutputSchema,
+        response: z
+          .object({
+            answers: z.array(userInputAnswerOutputSchema),
+            summary: z.string(),
+            source: z.enum(["elicitation", "tool", "ui"]),
+            action: z.enum(["accept", "decline", "cancel"]),
+          })
+          .optional(),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, questions, autoResolutionMs }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      validateQuestions(questions);
+      const requested = workspaceStore.createUserInputRequest({
+        workspaceSessionId: workspaceId,
+        questions,
+        autoResolutionMs,
+      });
+
+      const capabilities = server.server.getClientCapabilities();
+      const supportsElicitation = Boolean(capabilities?.elicitation?.form);
+
+      let record = requested;
+      let delivery:
+        | "elicitation_completed"
+        | "elicitation_declined"
+        | "elicitation_cancelled"
+        | "pending_fallback" = "pending_fallback";
+
+      if (supportsElicitation) {
+        try {
+          const elicitation = await server.server.elicitInput({
+            mode: "form",
+            message: "Please answer the following questions to continue.",
+            requestedSchema: toElicitationSchema(questions),
+          });
+
+          if (elicitation.action === "accept" && elicitation.content) {
+            record = workspaceStore.completeUserInput({
+              workspaceSessionId: workspaceId,
+              answers: answersFromElicitation(questions, elicitation.content),
+              summary: summarizeAnswers(questions, elicitation.content),
+              source: "elicitation",
+            });
+            delivery = "elicitation_completed";
+          } else if (elicitation.action === "decline") {
+            record = workspaceStore.cancelOrDeclineUserInput({
+              workspaceSessionId: workspaceId,
+              action: "decline",
+              source: "elicitation",
+            });
+            delivery = "elicitation_declined";
+          } else {
+            record = workspaceStore.cancelOrDeclineUserInput({
+              workspaceSessionId: workspaceId,
+              action: "cancel",
+              source: "elicitation",
+            });
+            delivery = "elicitation_cancelled";
+          }
+        } catch {
+          record = requested;
+          delivery = "pending_fallback";
+        }
+      }
+
+      const content = [
+        textBlock(
+          delivery === "pending_fallback"
+            ? `${formatUserInputPrompt(record.questions, record.autoResolutionMs)}\nSubmit answers with answer_user_input or the inline card.`
+            : formatUserInputRecordResult(record),
+        ),
+      ];
+
+      logToolCall(config, {
+        tool: "request_user_input",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          status: record.status,
+          delivery,
+          prompt: toStructuredUserInputRecord(record),
+          response: record.response,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "get_pending_user_input",
+    {
+      title: "Get pending user input",
+      description:
+        "Get the currently pending user-input request for a workspace, if one exists.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+      },
+      outputSchema: {
+        result: z.string(),
+        prompt: userInputPromptOutputSchema.nullable(),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const pending = workspaceStore.getPendingUserInput(workspaceId);
+      const content = [
+        textBlock(
+          pending
+            ? formatUserInputPrompt(pending.questions, pending.autoResolutionMs)
+            : "No pending user-input request for this workspace.",
+        ),
+      ];
+
+      logToolCall(config, {
+        tool: "get_pending_user_input",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          prompt: pending ? toStructuredUserInputRecord(pending) : null,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "answer_user_input",
+    {
+      title: "Answer user input",
+      description:
+        "Answer the currently pending user-input request for a workspace and complete the request lifecycle.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        source: z.enum(["tool", "ui"]).optional(),
+        answers: z.array(
+          z.object({
+            questionId: z.string(),
+            label: z.string(),
+          }),
+        ).min(1),
+      },
+      outputSchema: {
+        result: z.string(),
+        prompt: userInputPromptOutputSchema,
+        response: z.object({
+          answers: z.array(userInputAnswerOutputSchema),
+          summary: z.string(),
+          source: z.enum(["elicitation", "tool", "ui"]),
+          action: z.enum(["accept", "decline", "cancel"]),
+        }),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, answers, source }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const pending = workspaceStore.getPendingUserInput(workspaceId);
+      if (!pending) {
+        const response = toolError("No pending user-input request exists for this workspace.");
+        logFailedToolResponse(config, {
+          tool: "answer_user_input",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+
+      validateSubmittedAnswers(pending, answers);
+      const summary = summarizeSubmittedAnswers(pending, answers);
+      const completed = workspaceStore.completeUserInput({
+        workspaceSessionId: workspaceId,
+        answers,
+        summary,
+        source: source ?? "tool",
+      });
+      const content = [textBlock(formatUserInputRecordResult(completed))];
+
+      logToolCall(config, {
+        tool: "answer_user_input",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        _meta: {
+          tool: "answer_user_input",
+          card: {
+            workspaceId,
+            status: completed.status,
+            summary: {
+              answered: completed.response?.answers.length ?? 0,
+            },
+            payload: {
+              content,
+            },
+            userInput: toStructuredUserInputRecord(completed),
+          },
+        },
+        structuredContent: {
+          result: contentText(content),
+          prompt: toStructuredUserInputRecord(completed),
+          response: completed.response,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "list_user_input_history",
+    {
+      title: "List user input history",
+      description:
+        "List recent user-input requests and answers for a workspace.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        limit: z.number().int().positive().max(20).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        history: z.array(userInputPromptOutputSchema),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, limit }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const history = workspaceStore.listUserInputHistory(workspaceId, limit);
+      const content = [textBlock(history.length === 0 ? "No user-input history for this workspace." : history.map(formatUserInputRecordResult).join("\n\n"))];
+
+      logToolCall(config, {
+        tool: "list_user_input_history",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          history: history.map(toStructuredUserInputRecord),
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "update_plan",
+    {
+      title: "Update plan",
+      description:
+        "Store or replace a workspace-scoped execution plan. Use this when the task benefits from a short checklist with pending, in-progress, and completed steps.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        explanation: z
+          .string()
+          .optional()
+          .describe("Optional short explanation for this plan update."),
+        plan: z
+          .array(
+            z.object({
+              step: z.string().describe("Concrete plan step."),
+              status: z.enum(["pending", "in_progress", "completed"]),
+            }),
+          )
+          .min(1)
+          .describe("Current workspace plan. At most one step may be in_progress."),
+      },
+      outputSchema: {
+        result: z.string(),
+        explanation: z.string().optional(),
+        plan: z.array(
+          z.object({
+            step: z.string(),
+            status: z.enum(["pending", "in_progress", "completed"]),
+          }),
+        ),
+        updatedAt: z.string(),
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, explanation, plan }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const collaboration = workspaceStore.getCollaborationMode(workspaceId);
+      if (collaboration.mode === "plan") {
+        const response = toolError("update_plan is unavailable while the workspace is in plan mode. Use request_user_input, repository exploration, and concrete planning instead.");
+        logFailedToolResponse(config, {
+          tool: "update_plan",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+
+      validatePlanSteps(plan);
+      const saved = workspaceStore.savePlan({
+        workspaceSessionId: workspaceId,
+        explanation,
+        steps: plan,
+      });
+      const content = [textBlock(formatPlanResult(saved.steps, saved.explanation))];
+
+      logToolCall(config, {
+        tool: "update_plan",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          explanation: saved.explanation,
+          plan: saved.steps,
+          updatedAt: saved.updatedAt,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "get_goal",
+    {
+      title: "Get goal",
+      description:
+        "Get the current workspace-scoped goal if one exists, including objective, status, and timestamps.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+      },
+      outputSchema: {
+        result: z.string(),
+        goal: z
+          .object({
+            objective: z.string(),
+            status: z.enum(["active", "complete", "blocked"]),
+            tokenBudget: z.number().int().positive().optional(),
+            createdAt: z.string(),
+            updatedAt: z.string(),
+            timeUsedSeconds: z.number().int().nonnegative(),
+            completedAt: z.string().optional(),
+            blockedAt: z.string().optional(),
+          })
+          .nullable(),
+      },
+      ...toolWidgetDescriptorMeta(config, "goal"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const goal = workspaceStore.getGoal(workspaceId);
+      const content = [textBlock(goal ? formatGoalResult(goal) : "No active or historical goal for this workspace.")];
+
+      logToolCall(config, {
+        tool: "get_goal",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          goal: goal
+            ? {
+                objective: goal.objective,
+                status: goal.status,
+                tokenBudget: goal.tokenBudget,
+                createdAt: goal.createdAt,
+                updatedAt: goal.updatedAt,
+                timeUsedSeconds: goal.timeUsedSeconds,
+                completedAt: goal.completedAt,
+                blockedAt: goal.blockedAt,
+              }
+            : null,
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "create_goal",
+    {
+      title: "Create goal",
+      description:
+        "Create a new workspace-scoped goal. Fails if an active goal already exists for that workspace.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        objective: z.string().describe("Concrete objective to pursue."),
+        tokenBudget: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Optional positive token budget for the goal."),
+      },
+      outputSchema: {
+        result: z.string(),
+        goal: z.object({
+          objective: z.string(),
+          status: z.literal("active"),
+          tokenBudget: z.number().int().positive().optional(),
+          createdAt: z.string(),
+          updatedAt: z.string(),
+          timeUsedSeconds: z.number().int().nonnegative(),
+        }),
+      },
+      ...toolWidgetDescriptorMeta(config, "goal"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, objective, tokenBudget }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const goal = workspaceStore.saveGoal({
+        workspaceSessionId: workspaceId,
+        objective,
+        tokenBudget,
+      });
+      const content = [textBlock(formatGoalResult(goal))];
+
+      logToolCall(config, {
+        tool: "create_goal",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          goal: {
+            objective: goal.objective,
+            status: goal.status,
+            tokenBudget: goal.tokenBudget,
+            createdAt: goal.createdAt,
+            updatedAt: goal.updatedAt,
+            timeUsedSeconds: goal.timeUsedSeconds,
+          },
+        },
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "update_goal",
+    {
+      title: "Update goal",
+      description:
+        "Mark the current workspace-scoped goal complete or blocked.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        status: z.enum(["complete", "blocked"]),
+      },
+      outputSchema: {
+        result: z.string(),
+        goal: z.object({
+          objective: z.string(),
+          status: z.enum(["complete", "blocked"]),
+          tokenBudget: z.number().int().positive().optional(),
+          createdAt: z.string(),
+          updatedAt: z.string(),
+          timeUsedSeconds: z.number().int().nonnegative(),
+          completedAt: z.string().optional(),
+          blockedAt: z.string().optional(),
+        }),
+      },
+      ...toolWidgetDescriptorMeta(config, "goal"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, status }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const goal = workspaceStore.updateGoalStatus({
+        workspaceSessionId: workspaceId,
+        status,
+      });
+      const content = [textBlock(formatGoalResult(goal, status === "complete"))];
+
+      logToolCall(config, {
+        tool: "update_goal",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return {
+        content,
+        structuredContent: {
+          result: contentText(content),
+          goal: {
+            objective: goal.objective,
+            status: goal.status,
+            tokenBudget: goal.tokenBudget,
+            createdAt: goal.createdAt,
+            updatedAt: goal.updatedAt,
+            timeUsedSeconds: goal.timeUsedSeconds,
+            completedAt: goal.completedAt,
+            blockedAt: goal.blockedAt,
+          },
         },
       };
     },
@@ -1301,7 +2008,9 @@ export function createServer(config = loadConfig()): RunningServer {
   const reviewCheckpoints = createReviewCheckpointManager();
 
   if (config.logging.trustProxy) {
-    app.set("trust proxy", true);
+    // DevSpace sits behind exactly one local reverse proxy: Nginx.
+    // Do not trust arbitrary forwarded chains from public clients.
+    app.set("trust proxy", 1);
   }
 
   app.use((req, res, next) => {
@@ -1432,7 +2141,7 @@ export function createServer(config = loadConfig()): RunningServer {
           }
         };
 
-        const server = createMcpServer(config, workspaces, reviewCheckpoints);
+        const server = createMcpServer(config, workspaces, reviewCheckpoints, workspaceStore);
         await server.connect(transport);
       } else {
         sendJsonRpcError(res, 400, -32000, "No valid MCP session");
@@ -1452,6 +2161,197 @@ export function createServer(config = loadConfig()): RunningServer {
   });
 
   return { app, config };
+}
+
+function validatePlanSteps(steps: WorkspacePlanStep[]): void {
+  const inProgressCount = steps.filter((step) => step.status === "in_progress").length;
+  if (inProgressCount > 1) {
+    throw new Error("A plan may have at most one in_progress step.");
+  }
+}
+
+function validateQuestions(questions: WorkspaceQuestion[]): void {
+  for (const question of questions) {
+    if (question.options.length < 2 || question.options.length > 3) {
+      throw new Error("Each question must have 2 or 3 options.");
+    }
+  }
+}
+
+function validateSubmittedAnswers(
+  pending: WorkspaceUserInputRecord,
+  answers: WorkspaceUserInputAnswer[],
+): void {
+  const answerMap = new Map(answers.map((answer) => [answer.questionId, answer.label]));
+  if (answerMap.size !== pending.questions.length) {
+    throw new Error("Each pending question must have exactly one submitted answer.");
+  }
+
+  for (const question of pending.questions) {
+    const selected = answerMap.get(question.id);
+    if (!selected) {
+      throw new Error(`Missing answer for question ${question.id}.`);
+    }
+    if (!question.options.some((option) => option.label === selected)) {
+      throw new Error(`Invalid answer label for question ${question.id}: ${selected}`);
+    }
+  }
+}
+
+function formatPlanResult(steps: WorkspacePlanStep[], explanation: string | undefined): string {
+  const summary = steps
+    .map((step) => `${step.status === "completed" ? "[done]" : step.status === "in_progress" ? "[doing]" : "[todo]"} ${step.step}`)
+    .join("\n");
+  return explanation ? `${explanation}\n${summary}` : summary;
+}
+
+function toElicitationSchema(questions: WorkspaceQuestion[]): {
+  type: "object";
+  properties: Record<
+    string,
+    {
+      type: "string";
+      title: string;
+      description: string;
+      oneOf: Array<{
+        const: string;
+        title: string;
+        description: string;
+      }>;
+    }
+  >;
+  required: string[];
+} {
+  return {
+    type: "object",
+    properties: Object.fromEntries(
+      questions.map((question) => [
+        question.id,
+        {
+          type: "string",
+          title: question.header,
+          description: question.question,
+          oneOf: question.options.map((option) => ({
+            const: option.label,
+            title: option.label,
+            description: option.description,
+          })),
+        },
+      ]),
+    ),
+    required: questions.map((question) => question.id),
+  };
+}
+
+function answersFromElicitation(
+  questions: WorkspaceQuestion[],
+  content: Record<string, string | number | boolean | string[]>,
+): WorkspaceUserInputAnswer[] {
+  return questions.map((question) => ({
+    questionId: question.id,
+    label: String(content[question.id] ?? ""),
+  }));
+}
+
+function summarizeAnswers(
+  questions: WorkspaceQuestion[],
+  content: Record<string, string | number | boolean | string[]>,
+): string {
+  return questions
+    .map((question) => `${question.header}: ${String(content[question.id] ?? "")}`)
+    .join("\n");
+}
+
+function summarizeSubmittedAnswers(
+  pending: WorkspaceUserInputRecord,
+  answers: WorkspaceUserInputAnswer[],
+): string {
+  const answerMap = new Map(answers.map((answer) => [answer.questionId, answer.label]));
+  return pending.questions
+    .map((question) => `${question.header}: ${answerMap.get(question.id) ?? ""}`)
+    .join("\n");
+}
+
+function formatGoalResult(goal: {
+  objective: string;
+  status: "active" | "complete" | "blocked";
+  tokenBudget?: number;
+  createdAt: string;
+  updatedAt: string;
+  timeUsedSeconds: number;
+  completedAt?: string;
+  blockedAt?: string;
+}, includeCompletionNote = false): string {
+  const lines = [
+    `Goal: ${goal.objective}`,
+    `Status: ${goal.status}`,
+    goal.tokenBudget !== undefined ? `Token budget: ${goal.tokenBudget}` : undefined,
+    `Created: ${goal.createdAt}`,
+    `Updated: ${goal.updatedAt}`,
+    `Time used seconds: ${goal.timeUsedSeconds}`,
+    goal.completedAt ? `Completed: ${goal.completedAt}` : undefined,
+    goal.blockedAt ? `Blocked: ${goal.blockedAt}` : undefined,
+    includeCompletionNote ? "Report the final budget and usage summary back to the user if the host tracks it." : undefined,
+  ];
+
+  return lines.filter(Boolean).join("\n");
+}
+
+function formatUserInputRecordResult(record: WorkspaceUserInputRecord): string {
+  const lines = [
+    `Status: ${record.status}`,
+    record.response?.summary,
+    record.deliveryMode ? `Delivery: ${record.deliveryMode}` : undefined,
+    record.answeredAt ? `Answered: ${record.answeredAt}` : undefined,
+  ];
+
+  if (record.status === "pending") {
+    lines.unshift(formatUserInputPrompt(record.questions, record.autoResolutionMs));
+  }
+
+  return lines.filter(Boolean).join("\n");
+}
+
+function formatUserInputPrompt(
+  questions: WorkspaceQuestion[],
+  autoResolutionMs: number | undefined,
+): string {
+  const lines = questions.flatMap((question) => [
+    `${question.header}: ${question.question}`,
+    ...question.options.map((option) => `- ${option.label}: ${option.description}`),
+  ]);
+  if (autoResolutionMs !== undefined) {
+    lines.push(`Auto resolution: ${autoResolutionMs}ms`);
+  }
+
+  return lines.join("\n");
+}
+
+function toStructuredUserInputRecord(record: WorkspaceUserInputRecord): {
+  questions: WorkspaceQuestion[];
+  autoResolutionMs?: number;
+  status: "pending" | "completed" | "declined" | "cancelled";
+  deliveryMode?: "elicitation" | "tool" | "ui";
+  createdAt: string;
+  updatedAt: string;
+  answeredAt?: string;
+  response?: {
+    answers: WorkspaceUserInputAnswer[];
+    summary: string;
+    source: "elicitation" | "tool" | "ui";
+    action: "accept" | "decline" | "cancel";
+  };
+} {
+  return {
+    questions: record.questions,
+    autoResolutionMs: record.autoResolutionMs,
+    status: record.status,
+    deliveryMode: record.deliveryMode,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    answeredAt: record.answeredAt,
+    response: record.response,
+  };
 }
 
 async function isMainModule(): Promise<boolean> {
