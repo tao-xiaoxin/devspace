@@ -4,7 +4,11 @@ import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import {
+  createOAuthMetadata,
+  mcpAuthRouter,
+  getOAuthProtectedResourceMetadataUrl,
+} from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -1312,6 +1316,15 @@ export function createServer(config = loadConfig()): RunningServer {
       resourceName: "DevSpace",
     }),
   );
+
+  app.get("/.well-known/openid-configuration", (_req, res) => {
+    res.json(createOAuthMetadata({
+      provider: oauthProvider,
+      issuerUrl: new URL(config.publicBaseUrl),
+      baseUrl: new URL(config.publicBaseUrl),
+      scopesSupported: config.oauth.scopes,
+    }));
+  });
 
   app.options("/mcp-app-assets/{*asset}", (_req, res) => {
     setAssetHeaders(res);
