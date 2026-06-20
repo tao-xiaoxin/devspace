@@ -1306,6 +1306,15 @@ export function createServer(config = loadConfig()): RunningServer {
     next();
   });
 
+  app.get("/.well-known/openid-configuration", (_req, res) => {
+    res.json(createOAuthMetadata({
+      provider: oauthProvider,
+      issuerUrl: new URL(config.publicBaseUrl),
+      baseUrl: new URL(config.publicBaseUrl),
+      scopesSupported: config.oauth.scopes,
+    }));
+  });
+
   app.use(
     mcpAuthRouter({
       provider: oauthProvider,
@@ -1316,15 +1325,6 @@ export function createServer(config = loadConfig()): RunningServer {
       resourceName: "DevSpace",
     }),
   );
-
-  app.get("/.well-known/openid-configuration", (_req, res) => {
-    res.json(createOAuthMetadata({
-      provider: oauthProvider,
-      issuerUrl: new URL(config.publicBaseUrl),
-      baseUrl: new URL(config.publicBaseUrl),
-      scopesSupported: config.oauth.scopes,
-    }));
-  });
 
   app.options("/mcp-app-assets/{*asset}", (_req, res) => {
     setAssetHeaders(res);
