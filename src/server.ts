@@ -101,6 +101,8 @@ interface ToolDefinitionMeta extends Record<string, unknown> {
     resourceUri: string;
     visibility: ["model"];
   };
+  "ui/resourceUri": string;
+  "openai/outputTemplate": string;
 }
 
 type EmptyToolDefinitionMeta = Record<string, unknown> & {
@@ -134,6 +136,8 @@ function toolWidgetDescriptorMeta(
         resourceUri: WORKSPACE_APP_URI,
         visibility: ["model"],
       },
+      "ui/resourceUri": WORKSPACE_APP_URI,
+      "openai/outputTemplate": WORKSPACE_APP_URI,
     },
   };
 }
@@ -411,6 +415,17 @@ function appCsp(config: ServerConfig): {
   };
 }
 
+function openAiWidgetCsp(config: ServerConfig): {
+  resource_domains: string[];
+  connect_domains: string[];
+} {
+  const csp = appCsp(config);
+  return {
+    resource_domains: csp.resourceDomains,
+    connect_domains: csp.connectDomains,
+  };
+}
+
 function uiBuildDirectory(): string {
   return fileURLToPath(new URL("../dist/ui", import.meta.url));
 }
@@ -462,6 +477,9 @@ function createMcpServer(
         ui: {
           csp: appCsp(config),
         },
+        "openai/widgetDescription": "Interactive DevSpace workspace and file-change view.",
+        "openai/widgetPrefersBorder": true,
+        "openai/widgetCSP": openAiWidgetCsp(config),
       },
     },
     async () => {
@@ -476,6 +494,9 @@ function createMcpServer(
               ui: {
                 csp: appCsp(config),
               },
+              "openai/widgetDescription": "Interactive DevSpace workspace and file-change view.",
+              "openai/widgetPrefersBorder": true,
+              "openai/widgetCSP": openAiWidgetCsp(config),
             },
           },
         ],
