@@ -1307,6 +1307,7 @@ export function createServer(config = loadConfig()): RunningServer {
   });
 
   app.get("/.well-known/openid-configuration", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
     res.json(createOAuthMetadata({
       provider: oauthProvider,
       issuerUrl: new URL(config.publicBaseUrl),
