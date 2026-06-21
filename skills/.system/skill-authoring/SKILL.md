@@ -1,37 +1,34 @@
 ---
 name: skill-authoring
-description: Create or revise DevSpace Skills with stable aliases, controlled resource access, test coverage, and no hidden execution behavior.
+description: Create or revise DevSpace Skills with clear workflows, stable system routing, controlled resource access, and test coverage.
 license: MIT
 metadata:
-  version: 2.0.0
+  version: 3.0.0
   author: DevSpace
-  category: engineering
-  updated: 2026-06-21
+  category: system-engineering
+  updated: 2026-06-22
 ---
 
-# DevSpace Skill Authoring
+# Skill Authoring
 
-Use this Skill when creating or revising a Skill bundled with DevSpace or installed in a workspace.
+Use this Skill to create or revise a Skill bundled with DevSpace or stored in a project.
 
 ## Requirements
 
-- Every Skill must have valid frontmatter with `name` and `description`.
-- Instructions must describe a real workflow, tool lifecycle, safety boundary, validation standard, and recovery path where relevant.
-- Put supporting detail in `references/`; do not make `SKILL.md` a one-line prompt or an unbounded manual.
-- Skills must never imply automatic execution of scripts, shell commands, Git operations, or file writes.
-- A Skill can only expose its resources after `resolve_skill` or a direct read of its `SKILL.md` activates it.
-- `/plan` and `/goal` are reserved DevSpace aliases. Do not create a local Skill that expects to override them.
+- Every Skill has valid frontmatter with an accurate `name` and `description`.
+- Instructions describe a concrete lifecycle: when the Skill applies, what evidence to inspect, which tools to use, safety boundaries, validation, and recovery behavior.
+- Put detailed contracts and examples in `references/`; do not make `SKILL.md` a one-line persona prompt or an unbounded manual.
+- A Skill never grants automatic execution of scripts, shell commands, Git, service operations, file writes, network access, or credentials.
+- Use `resolve_skill` to activate a Skill before reading its `skill://` resources.
 
-## Bundled Skill Layout
+## Directory policy
 
 ```text
-skills/.system/<skill-name>/
-├── SKILL.md
-└── references/
+skills/.system/           DevSpace system Skills only
+skills/local/             repository-maintained project Skills
+skills/installed/         externally installed project Skills
 ```
 
-DevSpace core Skills live directly under `skills/.system/`. Vendored OpenAI Skills live under `skills/.system/openai/skills/` and must remain unmodified except during a documented upstream sync.
+System Skill names are reserved: `plan`, `goal`, `workflow`, `architecture-review`, and `skill-authoring`. `/plan` and `/goal` are fixed system aliases and cannot be overridden.
 
-## Validation
-
-When changing Skills, add or update tests for discovery, source priority, alias routing, `skill://` access, packaging, and any tool contract the Skill depends on.
+Read [references/structure-checklist.md](references/structure-checklist.md) before accepting a Skill change.

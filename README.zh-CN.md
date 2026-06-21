@@ -162,17 +162,17 @@ DevSpace 为 ChatGPT 提供了这些能力：
 - 从你的技能目录中发现本地 agent skills
 - 在兼容 ChatGPT Apps 的宿主中显示工具卡片和可选的变更摘要
 
-DevSpace 还内置了一小组工作流与工程技能。这些技能的结构灵感来自 [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills)，后者采用 MIT 许可证发布。
+DevSpace 内置一组稳定的工作流与工程技能，用于 Plan、Goal、跨会话恢复、架构审查和 Skill 编写。
 
 项目技能目录按用途拆分为：
 
-- DevSpace 自带并随项目提交的 system 内置技能
+- `skills/.system`：DevSpace 自己维护的 5 个系统技能：`plan`、`goal`、`workflow`、`architecture-review`、`skill-authoring`
 - `skills/local`：你希望随项目版本控制保存的项目自定义技能
-- `skills/installed`：用户安装的项目技能，默认被 git 忽略
+- `skills/installed`：按需安装的外部技能，默认被 git 忽略
 
 网页版 ChatGPT Plus 不能原生安装或注册 Codex Skills。DevSpace 改为在 MCP 这一侧提供技能安装、发现和解析这一层能力。
 
-`@devspace /plan` 和 `@devspace /goal` 只是别名风格的工作流约定，不是 ChatGPT 原生斜杠命令。
+`@devspace /plan` 和 `@devspace /goal` 只是别名风格的工作流约定，不是 ChatGPT 原生斜杠命令。`/plan` 固定对应系统 `plan`，`/goal` 固定对应系统 `goal`；本地、已安装和全局技能都不能覆盖它们。
 
 用这些命令管理已安装技能：
 

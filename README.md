@@ -183,14 +183,13 @@ DevSpace bundles durable workflow Skills rather than short prompt examples. Core
 
 Project Skill directories are split by purpose:
 
-- `skills/.system`: DevSpace core workflow Skills committed with DevSpace
-- `skills/.system/openai/skills` (when vendored): reviewed OpenAI Skills, synchronized manually and never updated at runtime
+- `skills/.system`: exactly five DevSpace-owned system Skills: `plan`, `goal`, `workflow`, `architecture-review`, and `skill-authoring`
 - `skills/local`: project-defined Skills you want to keep in version control
-- `skills/installed`: user-installed project Skills, ignored by git by default
+- `skills/installed`: user-installed external Skills, ignored by git by default
 
 ChatGPT Plus on the web cannot natively install or register Codex Skills. DevSpace provides MCP-side discovery, resolution, and controlled `skill://` resource access instead.
 
-`@devspace /plan` and `@devspace /goal` are stable alias-style workflow conventions. `/plan` always resolves to `devspace-plan`; `/goal` always resolves to `devspace-goal`; local or vendored Skills cannot silently override them. See [vendored OpenAI Skills](docs/openai-skills-vendor.md) for the manual review and synchronization policy.
+`@devspace /plan` and `@devspace /goal` are stable alias-style workflow conventions. `/plan` always resolves to system `plan`; `/goal` always resolves to system `goal`; local, installed, and global Skills cannot silently override them. `skills/.system/README.md` records the system Skill policy and change log.
 
 Manage installed skills with:
 

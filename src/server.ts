@@ -234,9 +234,7 @@ function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
 const skillSourceOutputSchema = z.enum([
   "devspace_system",
   "local",
-  "legacy_core",
   "installed",
-  "official_vendored",
   "global",
 ]);
 
@@ -760,7 +758,6 @@ function createMcpServer(
         .filter((skill) => (
           skill.source === "devspace_system" ||
           skill.source === "local" ||
-          skill.source === "legacy_core" ||
           skill.source === "installed"
         ))
         .sort((left, right) => left.name.localeCompare(right.name));
@@ -861,7 +858,7 @@ function createMcpServer(
         "Resolve a skill name or alias such as /plan or /goal for the current workspace. This tool only reads and returns skill instructions; it does not execute installation, file changes, or commands.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
-        nameOrAlias: z.string().describe("Skill name, qualifiedId, or alias such as devspace-plan, openai:.curated/define-goal, /plan, or /goal."),
+        nameOrAlias: z.string().describe("Skill name or stable alias such as plan, goal, /plan, or /goal."),
       },
       outputSchema: {
         result: z.string(),
@@ -3504,9 +3501,7 @@ function summarizeSkills(skills: Array<{ source: SkillSource }>): {
   const bySource: Record<SkillSource, number> = {
     devspace_system: 0,
     local: 0,
-    legacy_core: 0,
     installed: 0,
-    official_vendored: 0,
     global: 0,
   };
   for (const skill of skills) bySource[skill.source]++;

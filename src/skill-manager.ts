@@ -283,12 +283,7 @@ async function assertInstallConflicts(
   const existing = loaded.skills.find((skill) => skill.name === skillName);
   if (!existing) return;
 
-  if (
-    existing.source === "devspace_system" ||
-    existing.source === "official_vendored" ||
-    existing.source === "local" ||
-    existing.source === "legacy_core"
-  ) {
+  if (existing.source === "devspace_system" || existing.source === "local") {
     throw new Error(
       `Skill ${skillName} conflicts with an existing ${skillSourceLabel(existing.source)} skill.`,
     );

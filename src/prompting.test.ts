@@ -26,11 +26,11 @@ assert.match(instructions, /Prefer action over explanation\./);
 assert.match(instructions, /Keep responses terse and operational\./);
 assert.match(instructions, /Do not add long design discussion, repeated background, or speculative future improvements unless the user explicitly asks for them\./);
 assert.match(instructions, /When the user sends a short reply such as '1B, 2A', treat it as workflow input and continue instead of explaining the mechanism back to them\./);
-assert.match(instructions, /When the user mentions a skill name, \/plan, or \/goal, use resolve_skill to load the relevant SKILL\.md instructions\./);
+assert.match(instructions, /When the user mentions a Skill name, \/plan, or \/goal, use resolve_skill to load the relevant SKILL\.md instructions\./);
 assert.match(instructions, /Plan and Goal as project-scoped shared workflow state/);
 assert.match(instructions, /open_workspace returns only workflowDigest/);
 assert.match(instructions, /update_plan is allowed in plan mode/);
-assert.match(instructions, /\/plan always resolves to DevSpace's devspace-plan Skill/);
+assert.match(instructions, /\/plan always resolves to DevSpace's system plan Skill/);
 assert.match(instructions, /Treat \/plan and \/goal as aliases, not native ChatGPT slash commands\./);
 assert.match(instructions, /Use handle_workspace_command only for compact pending-input replies or legacy workflow compatibility\./);
 

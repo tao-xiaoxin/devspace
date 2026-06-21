@@ -12,14 +12,26 @@ assert.equal(Array.isArray(packageJson.files), true);
 assert.equal((packageJson.files as string[]).includes("skills"), true);
 
 for (const path of [
-  "skills/.system/devspace-plan/SKILL.md",
-  "skills/.system/devspace-plan/references/plan-state.md",
-  "skills/.system/devspace-goal/SKILL.md",
-  "skills/.system/devspace-goal/references/goal-state.md",
-  "skills/.system/devspace-workflow/SKILL.md",
-  "skills/.system/devspace-workflow/references/workflow-recovery.md",
-  "skills/.system/senior-architect/SKILL.md",
+  "skills/.system/README.md",
+  "skills/.system/plan/SKILL.md",
+  "skills/.system/plan/references/state.md",
+  "skills/.system/goal/SKILL.md",
+  "skills/.system/goal/references/metrics.md",
+  "skills/.system/workflow/SKILL.md",
+  "skills/.system/workflow/references/routing.md",
+  "skills/.system/architecture-review/SKILL.md",
   "skills/.system/skill-authoring/SKILL.md",
 ]) {
   assert.equal(existsSync(resolve(projectRoot, path)), true, `Missing bundled Skill asset: ${path}`);
+}
+
+for (const removedPath of [
+  "skills/openai",
+  "skills/.system/devspace-plan",
+  "skills/.system/devspace-goal",
+  "skills/.system/devspace-workflow",
+  "skills/.system/senior-architect-lite",
+  "skills/.system/skill-authoring-lite",
+]) {
+  assert.equal(existsSync(resolve(projectRoot, removedPath)), false, `Unexpected legacy Skill path: ${removedPath}`);
 }

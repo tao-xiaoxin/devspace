@@ -80,8 +80,7 @@ Skills are enabled by default for coding-agent workflows.
 
 DevSpace discovers Skills from:
 
-- DevSpace core workflow Skills in `skills/.system`
-- vendored OpenAI Skills in `skills/.system/openai/skills` when present
+- five DevSpace system Skills in `skills/.system`: `plan`, `goal`, `workflow`, `architecture-review`, and `skill-authoring`
 - workspace-local Skills in `skills/local`
 - workspace-installed Skills in `skills/installed`
 - `DEVSPACE_AGENT_DIR`, which defaults to `~/.codex`
@@ -89,7 +88,7 @@ DevSpace discovers Skills from:
 
 ChatGPT Plus on the web cannot natively install or register Codex Skills. In this setup, DevSpace provides MCP-based skill installation, discovery, and resolution.
 
-`@devspace /plan` and `@devspace /goal` are workflow aliases, not native ChatGPT slash commands. `/plan` always resolves to `devspace-plan`; `/goal` always resolves to `devspace-goal`. Vendored and project-local Skills cannot silently override either alias.
+`@devspace /plan` and `@devspace /goal` are workflow aliases, not native ChatGPT slash commands. `/plan` always resolves to system `plan`; `/goal` always resolves to system `goal`. Project-local, installed, and global Skills cannot silently override either alias.
 
 User-installed project skills can be managed through DevSpace itself:
 
@@ -117,7 +116,7 @@ User-installed project skills can be managed through DevSpace itself:
 @devspace /goal 将 DevSpace 的第三方 Skill 安装流程收敛为可测试、可回滚、跨平台兼容的实现
 ```
 
-`open_workspace` returns core and project Skill metadata only, capped at 24 entries, plus a source-count summary. Use `resolve_skill` to load the full `SKILL.md` once a Skill is selected. Use `search_skills` to discover vendored or additional Skills without loading every Skill instruction into context.
+`open_workspace` returns system and project Skill metadata only, capped at 24 entries, plus a source-count summary. Use `resolve_skill` to load the full `SKILL.md` once a Skill is selected. Use `search_skills` to discover additional local, installed, or global Skills without loading every Skill instruction into context.
 
 Skill resources use `skill://` locators. DevSpace only permits reading:
 
@@ -126,7 +125,7 @@ Skill resources use `skill://` locators. DevSpace only permits reading:
 
 Set `DEVSPACE_SKILLS=0` to hide skills from workspace output.
 
-DevSpace core Skills define the stable `/plan`, `/goal`, workflow recovery, and MCP Tool contracts. Vendored OpenAI Skills are an optional, manually reviewed source and never control the core aliases.
+DevSpace system Skills define the stable `/plan`, `/goal`, workflow recovery, and MCP Tool contracts. External Skills are installed only when needed and never control the core aliases.
 
 ## Project Workflow Store
 
