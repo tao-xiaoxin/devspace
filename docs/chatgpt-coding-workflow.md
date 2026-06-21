@@ -98,6 +98,10 @@ User-installed project skills can be managed through DevSpace itself:
 ```
 
 ```text
+请注意 install_skill 只接受标准 skill 包目录。像仓库根目录、plugin 目录、commands 目录或 agent rules 目录都不应该安装，只有直接包含 SKILL.md 的 skill 目录才可以。
+```
+
+```text
 请调用 list_installed_skills，列出当前 workspace 的 installed skills。
 ```
 

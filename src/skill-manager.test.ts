@@ -24,6 +24,8 @@ try {
   const conflictingLocal = join(root, "create-plan");
   const invalidDirSkill = join(root, "mismatched-dir");
   const symlinkSkill = join(root, "symlink-skill");
+  const pluginLikeRoot = join(root, "plugin-like-root");
+  const commandsOnlyDir = join(root, "commands-only");
 
   await mkdir(projectRoot, { recursive: true });
   await mkdir(join(agentDir, "skills"), { recursive: true });
@@ -100,6 +102,15 @@ try {
     ].join("\n"),
   );
   await symlink(join(root, "project"), join(symlinkSkill, "linked-project"));
+
+  await mkdir(pluginLikeRoot, { recursive: true });
+  await writeFile(
+    join(pluginLikeRoot, "plugin.json"),
+    JSON.stringify({ name: "plugin-like-root" }, null, 2),
+  );
+
+  await mkdir(commandsOnlyDir, { recursive: true });
+  await writeFile(join(commandsOnlyDir, "README.md"), "# Commands Only\n");
 
   const config = loadConfig({
     DEVSPACE_ALLOWED_ROOTS: `${projectRoot},${root}`,
@@ -205,6 +216,30 @@ try {
         localPathResolver: (path) => path,
       }),
     /symlink/,
+  );
+
+  await assert.rejects(
+    () =>
+      installSkill({
+        config,
+        workspaceRoot: projectRoot,
+        scope: "workspace",
+        source: { kind: "local", path: pluginLikeRoot },
+        localPathResolver: (path) => path,
+      }),
+    /missing SKILL\.md/,
+  );
+
+  await assert.rejects(
+    () =>
+      installSkill({
+        config,
+        workspaceRoot: projectRoot,
+        scope: "workspace",
+        source: { kind: "local", path: commandsOnlyDir },
+        localPathResolver: (path) => path,
+      }),
+    /missing SKILL\.md/,
   );
 
   await assert.rejects(

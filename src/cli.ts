@@ -575,6 +575,8 @@ function printHelp(): void {
       "  devspace skills list -g",
       "  devspace skills remove [--workspace <path>] <skill-name>",
       "  devspace skills remove -g <skill-name>",
+      "    install expects the target path to point at one standard skill directory with a SKILL.md file",
+      "    plugin roots, command folders, and agent-rules directories are rejected",
       "  devspace service install [--autostart]",
       "  devspace service uninstall",
       "  devspace service enable|disable|start|stop|restart",

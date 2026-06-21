@@ -187,13 +187,18 @@ Manage installed skills with:
 
 ```bash
 devspace skills install --repo openai/skills --path skills/.curated/research
+devspace skills install --workspace /path/to/project --repo openai/skills --path skills/.curated/research
 devspace skills list
+devspace skills list --workspace /path/to/project
 devspace skills remove research
+devspace skills remove --workspace /path/to/project research
 
 devspace skills install -g --repo openai/skills --path skills/.curated/research
 devspace skills list -g
 devspace skills remove -g research
 ```
+
+`--repo/--path` and `--local-path` must point directly at one standard skill directory that contains `SKILL.md`. Repository roots, plugin roots, command folders, and agent-rules directories are rejected.
 
 ## Mental Model
 

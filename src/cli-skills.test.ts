@@ -14,6 +14,7 @@ try {
   assert.match(help, /devspace skills install/);
   assert.match(help, /devspace skills list -g/);
   assert.match(help, /devspace skills remove -g/);
+  assert.match(help, /install expects the target path to point at one standard skill directory with a SKILL\.md file/);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
