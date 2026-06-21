@@ -82,6 +82,35 @@ try {
   const worktreeReadmePath = registry.resolvePath(worktreeWorkspace.workspace, "README.md");
   assert.equal(worktreeReadmePath.startsWith(worktreeWorkspace.workspace.root), true);
 
+  await mkdir(join(root, "skills", "installed", "refresh-skill"), { recursive: true });
+  await writeFile(
+    join(root, "skills", "installed", "refresh-skill", "SKILL.md"),
+    [
+      "---",
+      "name: refresh-skill",
+      "description: Refresh test skill.",
+      "---",
+      "",
+      "# Refresh Skill",
+    ].join("\n"),
+  );
+  assert.equal(workspace.skills.some((skill) => skill.name === "refresh-skill"), false);
+  const refreshedWorkspace = registry.refreshWorkspaceSkills(workspace.id);
+  assert.equal(refreshedWorkspace.skills.some((skill) => skill.name === "refresh-skill"), true);
+
+  const defaultOnlyConfig = loadConfig({
+    DEVSPACE_ALLOWED_ROOTS: `${root},${gitRoot}`,
+    DEVSPACE_WORKTREE_ROOT: join(root, ".devspace", "default-worktrees"),
+    DEVSPACE_AGENT_DIR: agentDir,
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    DEVSPACE_SESSION_WORKSPACE: root,
+    PORT: "1",
+  });
+  const defaultOnlyRegistry = new WorkspaceRegistry(defaultOnlyConfig);
+  const defaultWorkspace = await defaultOnlyRegistry.openWorkspace({ mode: "checkout" });
+  assert.equal(defaultWorkspace.workspace.root, root);
+  assert.equal(defaultWorkspace.workspace.mode, "checkout");
+
   const stateDir = join(root, ".state");
   const firstStore = new SqliteWorkspaceStore(stateDir);
   const persistentRegistry = new WorkspaceRegistry(config, firstStore);

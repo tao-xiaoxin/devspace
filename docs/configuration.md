@@ -22,9 +22,86 @@ DEVSPACE_CONFIG_DIR=/path/to/config npx @waishnav/devspace serve
 npx @waishnav/devspace init
 npx @waishnav/devspace serve
 npx @waishnav/devspace doctor
+npx @waishnav/devspace config show
+npx @waishnav/devspace config port 7676
+npx @waishnav/devspace config host 127.0.0.1
+npx @waishnav/devspace config domain devspace.example.com
+npx @waishnav/devspace config key
+npx @waishnav/devspace workspace add ~/workspace/project-a --default
+npx @waishnav/devspace workspace list
+npx @waishnav/devspace service install --autostart
+npx @waishnav/devspace service status
+npx @waishnav/devspace service logs --tail 100
 npx @waishnav/devspace config get
-npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 ```
+
+## Configuration Management
+
+The primary config commands are:
+
+```bash
+devspace config show
+devspace config port 7676
+devspace config host 127.0.0.1
+devspace config domain devspace.example.com
+devspace config key
+```
+
+`config port`, `config host`, `config domain`, and `config key` save the new
+value immediately. If a managed DevSpace background service is currently
+running, DevSpace automatically restarts it.
+
+`config key` rotates the existing Owner password stored in `auth.json`,
+invalidates saved OAuth approvals and tokens, and requires clients to
+reauthorize.
+
+`config show` reports the effective runtime values. Access keys are always
+masked. If the active Owner password comes from `DEVSPACE_OAUTH_OWNER_TOKEN`,
+DevSpace masks and shows that effective value.
+
+## Workspace Management
+
+Persisted workspace roots replace the old one-shot “roots only at init” flow:
+
+```bash
+devspace workspace add ~/workspace/project-a --default
+devspace workspace add ~/workspace/project-b
+devspace workspace list
+devspace workspace remove ~/workspace/project-a
+devspace workspace clear-default
+```
+
+Use temporary workspace overrides for one run:
+
+```bash
+devspace serve --add-dir ~/scratch/project-c --workspace ~/workspace/project-b
+```
+
+These workspace paths define the authorization boundary for DevSpace file tools.
+If no workspace is configured and `DEVSPACE_ALLOWED_ROOTS` is unset, DevSpace
+starts in a safe blocked state with no authorized workspace roots.
+
+## Service Management
+
+DevSpace only manages its own background service:
+
+```bash
+devspace service install --autostart
+devspace service status
+devspace service restart
+devspace service logs --tail 200
+devspace service doctor
+```
+
+Platform behavior:
+
+- Linux and Ubuntu use `systemctl --user` when user systemd is available.
+- macOS uses a per-user LaunchAgent.
+- Windows uses Task Scheduler.
+- WSL uses user systemd when available and otherwise reports a Task Scheduler fallback.
+
+DevSpace never auto-configures DNS, reverse proxies, TLS certificates, or
+firewall rules.
 
 ## Core Environment Variables
 
@@ -34,11 +111,17 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `PORT` | Local port. Defaults to `7676`. |
 | `DEVSPACE_ALLOWED_ROOTS` | Comma-separated local roots that workspaces may open. |
 | `DEVSPACE_PUBLIC_BASE_URL` | Public origin for the server, without `/mcp`. |
+| `DEVSPACE_MCP_PATH` | Optional MCP path override. Defaults to `/mcp`. |
 | `DEVSPACE_TUNNEL` | Optional automatic tunnel mode. Currently supports `cloudflare` when explicitly enabled. |
 | `DEVSPACE_ALLOWED_HOSTS` | Optional Host header allowlist override. |
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Owner password for OAuth approval. Must be at least 16 characters. |
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
+| `DEVSPACE_SESSION_WORKSPACE` | Temporary default workspace for the current `serve` run. |
+
+When `DEVSPACE_ALLOWED_ROOTS` is omitted, DevSpace does not fall back to the
+current working directory anymore. You must explicitly configure allowed roots
+through `devspace workspace add ...` or this environment variable.
 
 ## OAuth
 
@@ -52,9 +135,11 @@ DevSpace uses a single-user OAuth approval flow.
 | `DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS` | `chatgpt.com,localhost,127.0.0.1` |
 | `DEVSPACE_OAUTH_STATE_PATH` | `$DEVSPACE_STATE_DIR/oauth.json` |
 
-Registered OAuth clients and refresh token hashes are persisted in
-`$DEVSPACE_STATE_DIR/oauth.json` by default. Access tokens and authorization
-codes remain in memory only.
+Registered OAuth clients, token hashes, authorization code hashes, and approved
+consents are persisted in SQLite at `$DEVSPACE_STATE_DIR/devspace.sqlite` by
+default. `DEVSPACE_OAUTH_STATE_PATH` is kept as the legacy JSON state import
+path; when an existing JSON file is present, DevSpace imports compatible clients,
+token hashes, and consents into SQLite without storing raw tokens.
 
 MCP clients discover metadata from:
 
@@ -120,6 +205,24 @@ Use `--no-tunnel` to override configured tunnel mode for one run.
 | `DEVSPACE_SKILLS` | Set to `0` to hide skills. Enabled by default. |
 | `DEVSPACE_AGENT_DIR` | Defaults to `~/.codex`. |
 | `DEVSPACE_SKILL_PATHS` | Optional comma-separated skill directories. |
+
+Project skill layout:
+
+- `skills/core`: built-in DevSpace skills
+- `skills/local`: project skills meant to be committed
+- `skills/installed`: user-installed project skills, typically git-ignored
+
+Manage installed skills with:
+
+```bash
+devspace skills install --repo openai/skills --path skills/.curated/research
+devspace skills list
+devspace skills remove research
+
+devspace skills install -g --repo openai/skills --path skills/.curated/research
+devspace skills list -g
+devspace skills remove -g research
+```
 
 Example:
 

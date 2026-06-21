@@ -2,6 +2,9 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 
 export type ToolName =
   | "open_workspace"
+  | "install_skill"
+  | "list_installed_skills"
+  | "remove_skill"
   | "request_user_input"
   | "get_pending_user_input"
   | "answer_user_input"
@@ -97,6 +100,9 @@ export interface ToolPayload {
 export function isToolName(value: unknown): value is ToolName {
   return (
     value === "open_workspace" ||
+    value === "install_skill" ||
+    value === "list_installed_skills" ||
+    value === "remove_skill" ||
     value === "request_user_input" ||
     value === "get_pending_user_input" ||
     value === "answer_user_input" ||

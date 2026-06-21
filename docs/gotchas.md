@@ -201,6 +201,12 @@ DevSpace looks in:
 - `skills/core`
 - `DEVSPACE_SKILL_PATHS`
 
+Recommended meaning:
+
+- `skills/core`: built-in DevSpace skills
+- `skills/local`: project-defined skills you want to commit
+- `skills/installed`: user-installed project skills that should stay git-ignored
+
 If a skill appears in `open_workspace`, the model must read that skill's
 `SKILL.md` before reading other files inside the skill directory.
 

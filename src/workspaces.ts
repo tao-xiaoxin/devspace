@@ -56,7 +56,7 @@ export interface WorkspaceReadPath {
 }
 
 export interface OpenWorkspaceInput {
-  path: string;
+  path?: string;
   mode?: WorkspaceMode;
   baseRef?: string;
 }
@@ -71,13 +71,17 @@ export class WorkspaceRegistry {
 
   async openWorkspace(input: string | OpenWorkspaceInput): Promise<WorkspaceContext> {
     const options = typeof input === "string" ? { path: input } : input;
+    const path = options.path ?? this.defaultWorkspaceRoot();
+    if (!path) {
+      throw new Error("Workspace path is required unless a default workspace has been configured for this session.");
+    }
     const mode = options.mode ?? "checkout";
 
     if (mode === "worktree") {
-      return this.openWorktreeWorkspace(options.path, options.baseRef);
+      return this.openWorktreeWorkspace(path, options.baseRef);
     }
 
-    return this.openCheckoutWorkspace(options.path);
+    return this.openCheckoutWorkspace(path);
   }
 
   getWorkspace(workspaceId: string): Workspace {
@@ -116,6 +120,15 @@ export class WorkspaceRegistry {
     this.workspaces.set(restoredWorkspace.id, restoredWorkspace);
 
     return restoredWorkspace;
+  }
+
+  refreshWorkspaceSkills(workspaceId: string): Workspace {
+    const workspace = this.getWorkspace(workspaceId);
+    const refreshed = this.loadSkillsForWorkspace(workspace.root);
+    workspace.skills = refreshed.skills;
+    workspace.skillDiagnostics = refreshed.skillDiagnostics;
+    workspace.activatedSkillDirs.clear();
+    return workspace;
   }
 
   resolvePath(workspace: Workspace, inputPath: string): string {
@@ -158,6 +171,12 @@ export class WorkspaceRegistry {
   resolveWorkingDirectory(workspace: Workspace, workingDirectory: string | undefined): string {
     const directory = workingDirectory ? this.resolvePath(workspace, workingDirectory) : workspace.root;
     return assertAllowedPath(directory, [workspace.root]);
+  }
+
+  defaultWorkspaceRoot(): string | undefined {
+    const preferred = this.config.sessionWorkspace ?? this.config.defaultWorkspace;
+    if (!preferred) return undefined;
+    return assertAllowedPath(preferred, this.config.allowedRoots);
   }
 
   private async openCheckoutWorkspace(path: string): Promise<WorkspaceContext> {

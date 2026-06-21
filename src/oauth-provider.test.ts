@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { stat, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import Database from "better-sqlite3";
 import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { SingleUserOAuthProvider, type OAuthConfig } from "./oauth-provider.js";
+import { databasePath } from "./db/client.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 
@@ -31,19 +33,19 @@ try {
   });
   const firstTokens = issueTokens(firstProvider, client.client_id, ["devspace"], resourceServerUrl);
 
-  const savedState = JSON.parse(readFileSync(statePath, "utf8"));
+  const savedState = readPersistedState(statePath);
   assert.equal(savedState.clients.length, 1);
   assert.deepEqual(savedState.approvedConsents, []);
   assert.equal(savedState.accessTokens.length, 1);
   assert.equal(savedState.accessTokens[0].tokenHash.length > 0, true);
-  assert.equal(savedState.accessTokens[0].token, undefined);
+  assert.equal("token" in savedState.accessTokens[0], false);
   assert.equal(savedState.refreshTokens.length, 1);
   assert.equal(savedState.refreshTokens[0].tokenHash.length > 0, true);
-  assert.equal(savedState.refreshTokens[0].token, undefined);
+  assert.equal("token" in savedState.refreshTokens[0], false);
   assert.equal(JSON.stringify(savedState).includes(assertString(firstTokens.access_token)), false);
   assert.equal(JSON.stringify(savedState).includes(assertString(firstTokens.refresh_token)), false);
 
-  const stateStats = await stat(statePath);
+  const stateStats = await stat(databasePath(dirname(statePath)));
   const dirStats = await stat(join(root, "state"));
   assert.equal(stateStats.mode & 0o777, 0o600);
   assert.equal(dirStats.mode & 0o777, 0o700);
@@ -66,7 +68,7 @@ try {
   assert.equal(Boolean(secondTokens.refresh_token), true);
   assert.notEqual(secondTokens.refresh_token, firstTokens.refresh_token);
 
-  const rotatedState = JSON.parse(readFileSync(statePath, "utf8"));
+  const rotatedState = readPersistedState(statePath);
   assert.equal(rotatedState.refreshTokens.length, 1);
   assert.equal(rotatedState.accessTokens.length, 2);
   assert.equal(JSON.stringify(rotatedState).includes(assertString(firstTokens.access_token)), false);
@@ -105,7 +107,7 @@ try {
     () => expiredProvider.exchangeRefreshToken(client, assertString(firstTokens.refresh_token), undefined, resourceServerUrl),
     InvalidGrantError,
   );
-  const cleanedExpiredState = JSON.parse(readFileSync(expiredStatePath, "utf8"));
+  const cleanedExpiredState = readPersistedState(expiredStatePath);
   assert.equal(cleanedExpiredState.accessTokens.length, 0);
   assert.equal(cleanedExpiredState.refreshTokens.length, 0);
 
@@ -115,8 +117,8 @@ try {
   await chmod(corruptStatePath, 0o600);
   const corruptProvider = new SingleUserOAuthProvider({ ...config, statePath: corruptStatePath }, resourceServerUrl);
   assert.equal(corruptProvider.clientsStore.getClient(client.client_id), undefined);
-  const repairedState = JSON.parse(readFileSync(corruptStatePath, "utf8"));
-  assert.deepEqual(repairedState, { version: 1, clients: [], accessTokens: [], refreshTokens: [], approvedConsents: [] });
+  const repairedState = readPersistedState(corruptStatePath);
+  assert.deepEqual(repairedState, { clients: [], accessTokens: [], refreshTokens: [], approvedConsents: [] });
 
   const emptyStatePath = join(root, "empty", "oauth.json");
   mkdirSync(join(root, "empty"), { recursive: true });
@@ -124,8 +126,8 @@ try {
   await chmod(emptyStatePath, 0o600);
   const emptyProvider = new SingleUserOAuthProvider({ ...config, statePath: emptyStatePath }, resourceServerUrl);
   assert.equal(emptyProvider.clientsStore.getClient(client.client_id), undefined);
-  const rewrittenEmptyState = JSON.parse(readFileSync(emptyStatePath, "utf8"));
-  assert.deepEqual(rewrittenEmptyState, { version: 1, clients: [], accessTokens: [], refreshTokens: [], approvedConsents: [] });
+  const rewrittenEmptyState = readPersistedState(emptyStatePath);
+  assert.deepEqual(rewrittenEmptyState, { clients: [], accessTokens: [], refreshTokens: [], approvedConsents: [] });
 
   const customProvider = new SingleUserOAuthProvider({ ...config, statePath: customStatePath }, resourceServerUrl);
   customProvider.clientsStore.registerClient({
@@ -133,7 +135,7 @@ try {
     redirect_uris: ["http://localhost/custom"],
     scope: "devspace",
   });
-  assert.equal(JSON.parse(readFileSync(customStatePath, "utf8")).clients.length, 1);
+  assert.equal(readPersistedState(customStatePath).clients.length, 1);
 
   const expiredAccessStatePath = join(root, "expired-access", "oauth.json");
   mkdirSync(join(root, "expired-access"), { recursive: true });
@@ -162,7 +164,7 @@ try {
     () => expiredAccessProvider.verifyAccessToken(assertString(expiredAccessTokens.access_token)),
     InvalidTokenError,
   );
-  const cleanedExpiredAccessState = JSON.parse(readFileSync(expiredAccessStatePath, "utf8"));
+  const cleanedExpiredAccessState = readPersistedState(expiredAccessStatePath);
   assert.equal(cleanedExpiredAccessState.accessTokens.length, 0);
 
   const consentStatePath = join(root, "consent", "oauth.json");
@@ -185,7 +187,7 @@ try {
   assert.equal(firstConsentPost.redirectUrl?.searchParams.get("state"), "state-1");
   assert.match(assertPresentString(firstConsentPost.redirectUrl?.searchParams.get("code")), /^code-/);
 
-  const consentSavedState = JSON.parse(readFileSync(consentStatePath, "utf8"));
+  const consentSavedState = readPersistedState(consentStatePath);
   assert.equal(consentSavedState.approvedConsents.length, 1);
   assert.equal(consentSavedState.approvedConsents[0].clientId, consentClient.client_id);
   assert.equal(consentSavedState.approvedConsents[0].redirectUri, "http://localhost/consent");
@@ -252,7 +254,7 @@ try {
   assert.equal(restartedConsentGet.redirectStatus, 302);
   assert.equal(assertUrl(restartedConsentGet.redirectUrl).origin + assertUrl(restartedConsentGet.redirectUrl).pathname, "http://localhost/consent");
 
-  const finalConsentState = JSON.parse(readFileSync(consentStatePath, "utf8"));
+  const finalConsentState = readPersistedState(consentStatePath);
   assert.equal(JSON.stringify(finalConsentState).includes(config.ownerToken), false);
   assert.equal(JSON.stringify(finalConsentState).includes(assertString(firstTokens.access_token)), false);
   assert.equal(JSON.stringify(finalConsentState).includes(assertString(firstTokens.refresh_token)), false);
@@ -272,6 +274,64 @@ function issueTokens(
     currentResource?: URL,
   ) => OAuthTokens;
   return rawIssueTokens.call(provider, clientId, scopes, resource);
+}
+
+function readPersistedState(statePath: string) {
+  const db = new Database(databasePath(dirname(statePath)), { readonly: true });
+  try {
+    const clients = (db.prepare("select client_json from oauth_clients order by created_at asc").all() as { client_json: string }[])
+      .map((row) => JSON.parse(row.client_json));
+    const tokens = db.prepare("select token_hash, token_kind, client_id, scopes_json, expires_at, resource from oauth_tokens order by token_hash asc").all() as {
+      token_hash: string;
+      token_kind: "access" | "refresh";
+      client_id: string;
+      scopes_json: string;
+      expires_at: number;
+      resource: string | null;
+    }[];
+    const consents = db.prepare("select client_id, redirect_uri, resource, scopes_json, approved_at from oauth_consents order by approved_at asc").all() as {
+      client_id: string;
+      redirect_uri: string;
+      resource: string;
+      scopes_json: string;
+      approved_at: number;
+    }[];
+
+    return {
+      clients,
+      accessTokens: tokens
+        .filter((row) => row.token_kind === "access")
+        .map(rowToStoredToken),
+      refreshTokens: tokens
+        .filter((row) => row.token_kind === "refresh")
+        .map(rowToStoredToken),
+      approvedConsents: consents.map((row) => ({
+        clientId: row.client_id,
+        redirectUri: row.redirect_uri,
+        resource: row.resource,
+        scopes: JSON.parse(row.scopes_json) as string[],
+        approvedAt: row.approved_at,
+      })),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function rowToStoredToken(row: {
+  token_hash: string;
+  client_id: string;
+  scopes_json: string;
+  expires_at: number;
+  resource: string | null;
+}) {
+  return {
+    tokenHash: row.token_hash,
+    clientId: row.client_id,
+    scopes: JSON.parse(row.scopes_json) as string[],
+    expiresAt: row.expires_at,
+    resource: row.resource ?? undefined,
+  };
 }
 
 function assertString(value: string | undefined): string {

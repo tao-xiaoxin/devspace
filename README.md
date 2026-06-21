@@ -82,6 +82,78 @@ Most users should connect through a public HTTPS tunnel:
 https://your-tunnel-host.example.com/mcp
 ```
 
+## Configuration Management
+
+Update the local server config with short commands:
+
+```bash
+devspace config show
+devspace config port 7676
+devspace config host 127.0.0.1
+devspace config domain devspace.example.com
+devspace config key
+```
+
+Configuration changes are saved immediately. If a managed DevSpace background
+service is currently running, DevSpace automatically restarts it so the new
+settings take effect right away.
+
+`devspace config show` displays the effective bind host, port, MCP path, public
+URL, workspace list, service state, and a masked access key. If the current
+Owner password comes from `DEVSPACE_OAUTH_OWNER_TOKEN`, DevSpace masks and shows
+that effective value instead of reporting it as missing.
+
+`devspace config key` rotates the existing DevSpace Owner password, clears saved
+OAuth approvals and tokens, and forces connected clients to reauthorize.
+
+## Workspace Management
+
+Persist the workspace roots DevSpace is allowed to open:
+
+```bash
+devspace workspace add ~/workspace/project-a --default
+devspace workspace add ~/workspace/project-b
+devspace workspace list
+devspace workspace default ~/workspace/project-b
+devspace workspace remove ~/workspace/project-a
+```
+
+You can also allow extra paths for one run only:
+
+```bash
+devspace serve --add-dir ~/scratch/project-c --workspace ~/workspace/project-b
+```
+
+Workspace paths are the authorization boundary for DevSpace and MCP file tools.
+Adding a workspace authorizes only that path and its children.
+
+If you start DevSpace without any configured workspaces or `DEVSPACE_ALLOWED_ROOTS`,
+DevSpace now fails closed: the server can start, but workspace access is denied
+until you explicitly add an allowed path.
+
+## Service Management
+
+DevSpace service management only manages DevSpace itself. It does not manage
+arbitrary system services.
+
+```bash
+devspace service install --autostart
+devspace service status
+devspace service logs --tail 100
+devspace service restart
+devspace service doctor
+```
+
+Platform behavior:
+
+- macOS uses a per-user LaunchAgent.
+- Linux and Ubuntu use a per-user systemd service when available.
+- Windows uses Task Scheduler.
+- WSL prefers user systemd and otherwise reports a Windows Task Scheduler fallback.
+
+DevSpace does not automatically configure DNS, reverse proxies, TLS
+certificates, or firewall rules.
+
 ## What ChatGPT Can Do
 
 Once connected, ChatGPT can open one of your approved project folders as a
@@ -100,6 +172,24 @@ DevSpace gives ChatGPT tools to:
 
 DevSpace also bundles a small set of built-in workflow and engineering skills in `skills/core/`.
 Their structure is inspired by [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills), which is released under the MIT license.
+
+Project skill directories are split by purpose:
+
+- `skills/core`: built-in DevSpace skills, committed with DevSpace
+- `skills/local`: project-defined skills you want to keep in version control
+- `skills/installed`: user-installed project skills, ignored by git by default
+
+Manage installed skills with:
+
+```bash
+devspace skills install --repo openai/skills --path skills/.curated/research
+devspace skills list
+devspace skills remove research
+
+devspace skills install -g --repo openai/skills --path skills/.curated/research
+devspace skills list -g
+devspace skills remove -g research
+```
 
 ## Mental Model
 
@@ -120,7 +210,8 @@ For a normal ChatGPT coding session:
 ## Platform Support
 
 DevSpace supports Linux, macOS, and Windows environments with a Bash-compatible
-shell.
+shell for the main CLI, and supports native per-user service installation on
+macOS, Linux, Windows, and WSL.
 
 | Platform                                          | Status            | Notes                                          |
 | ------------------------------------------------- | ----------------- | ---------------------------------------------- |

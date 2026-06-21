@@ -1,14 +1,4 @@
 import { timingSafeEqual, randomBytes, randomUUID, createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
 import type { Response } from "express";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
@@ -20,6 +10,11 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import {
+  consentKey,
+  SqliteOAuthStore,
+  type AuthorizationCodeRecord,
+} from "./oauth-store.js";
 
 export interface OAuthConfig {
   ownerToken: string;
@@ -28,60 +23,6 @@ export interface OAuthConfig {
   scopes: string[];
   allowedRedirectHosts: string[];
   statePath?: string;
-}
-
-interface AuthorizationCodeRecord {
-  clientId: string;
-  params: AuthorizationParams;
-  expiresAtMs: number;
-}
-
-interface AccessTokenRecord {
-  token: string;
-  clientId: string;
-  scopes: string[];
-  expiresAt: number;
-  resource?: URL;
-}
-
-interface RefreshTokenRecord {
-  token: string;
-  clientId: string;
-  scopes: string[];
-  expiresAt: number;
-  resource?: URL;
-}
-
-interface StoredRefreshTokenRecord {
-  tokenHash: string;
-  clientId: string;
-  scopes: string[];
-  expiresAt: number;
-  resource?: string;
-}
-
-interface StoredAccessTokenRecord {
-  tokenHash: string;
-  clientId: string;
-  scopes: string[];
-  expiresAt: number;
-  resource?: string;
-}
-
-interface StoredOAuthConsentRecord {
-  clientId: string;
-  redirectUri: string;
-  resource: string;
-  scopes: string[];
-  approvedAt: number;
-}
-
-interface StoredOAuthState {
-  version: number;
-  clients: OAuthClientInformationFull[];
-  accessTokens: StoredAccessTokenRecord[];
-  refreshTokens: StoredRefreshTokenRecord[];
-  approvedConsents: StoredOAuthConsentRecord[];
 }
 
 const CODE_TTL_MS = 5 * 60 * 1000;
@@ -181,118 +122,15 @@ function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boole
   return allowedHosts.includes(parsed.hostname);
 }
 
-function emptyOAuthState(): StoredOAuthState {
-  return {
-    version: 1,
-    clients: [],
-    accessTokens: [],
-    refreshTokens: [],
-    approvedConsents: [],
-  };
-}
-
-function parseOAuthState(raw: string): StoredOAuthState {
-  const parsed = JSON.parse(raw) as Partial<StoredOAuthState>;
-  return {
-    version: 1,
-    clients: Array.isArray(parsed.clients) ? parsed.clients : [],
-    accessTokens: Array.isArray(parsed.accessTokens) ? parsed.accessTokens : [],
-    refreshTokens: Array.isArray(parsed.refreshTokens) ? parsed.refreshTokens : [],
-    approvedConsents: Array.isArray(parsed.approvedConsents) ? parsed.approvedConsents : [],
-  };
-}
-
-function readOAuthState(statePath: string | undefined): StoredOAuthState {
-  if (!statePath || !existsSync(statePath)) return emptyOAuthState();
-
-  try {
-    const raw = readFileSync(statePath, "utf8");
-    if (!raw.trim()) return emptyOAuthState();
-    return parseOAuthState(raw);
-  } catch {
-    return emptyOAuthState();
-  }
-}
-
-function ensurePrivateDirectory(directory: string): void {
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-}
-
-function writeOAuthState(
-  statePath: string | undefined,
-  clients: OAuthClientInformationFull[],
-  accessTokens: Iterable<[string, AccessTokenRecord]>,
-  refreshTokens: Iterable<[string, RefreshTokenRecord]>,
-  approvedConsents: Iterable<StoredOAuthConsentRecord>,
-): void {
-  if (!statePath) return;
-
-  const directory = dirname(statePath);
-  ensurePrivateDirectory(directory);
-
-  const state: StoredOAuthState = {
-    version: 1,
-    clients,
-    accessTokens: Array.from(accessTokens, ([tokenHash, record]) => ({
-      tokenHash,
-      clientId: record.clientId,
-      scopes: record.scopes,
-      expiresAt: record.expiresAt,
-      resource: record.resource?.href,
-    })),
-    refreshTokens: Array.from(refreshTokens, ([tokenHash, record]) => ({
-      tokenHash,
-      clientId: record.clientId,
-      scopes: record.scopes,
-      expiresAt: record.expiresAt,
-      resource: record.resource?.href,
-    })),
-    approvedConsents: Array.from(approvedConsents, (record) => ({
-      clientId: record.clientId,
-      redirectUri: record.redirectUri,
-      resource: record.resource,
-      scopes: record.scopes,
-      approvedAt: record.approvedAt,
-    })),
-  };
-  const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
-
-  try {
-    writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    chmodSync(tempPath, 0o600);
-    renameSync(tempPath, statePath);
-    chmodSync(statePath, 0o600);
-  } finally {
-    rmSync(tempPath, { force: true });
-  }
-}
-
-function parseStoredResource(resource: string | undefined): URL | undefined {
-  if (!resource) return undefined;
-
-  try {
-    return new URL(resource);
-  } catch {
-    return undefined;
-  }
-}
-
-export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
-  private readonly clients = new Map<string, OAuthClientInformationFull>();
+export class SqliteOAuthClientsStore implements OAuthRegisteredClientsStore {
 
   constructor(
     private readonly allowedRedirectHosts: string[],
-    initialClients: OAuthClientInformationFull[] = [],
-    private readonly onChange: () => void = () => {},
-  ) {
-    for (const client of initialClients) {
-      this.clients.set(client.client_id, client);
-    }
-  }
+    private readonly store: SqliteOAuthStore,
+  ) {}
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
-    return this.clients.get(clientId);
+    return this.store.getClient(clientId);
   }
 
   registerClient(
@@ -311,22 +149,18 @@ export class InMemoryOAuthClientsStore implements OAuthRegisteredClientsStore {
       grant_types: client.grant_types ?? ["authorization_code", "refresh_token"],
       response_types: client.response_types ?? ["code"],
     };
-    this.clients.set(registered.client_id, registered);
-    this.onChange();
+    this.store.saveClient(registered);
     return registered;
   }
 
   dumpClients(): OAuthClientInformationFull[] {
-    return Array.from(this.clients.values());
+    return this.store.listClients();
   }
 }
 
 export class SingleUserOAuthProvider implements OAuthServerProvider {
-  readonly clientsStore: InMemoryOAuthClientsStore;
-  private readonly codes = new Map<string, AuthorizationCodeRecord>();
-  private readonly accessTokens = new Map<string, AccessTokenRecord>();
-  private readonly refreshTokens = new Map<string, RefreshTokenRecord>();
-  private readonly approvedConsents = new Map<string, StoredOAuthConsentRecord>();
+  readonly clientsStore: SqliteOAuthClientsStore;
+  private readonly store: SqliteOAuthStore;
   private readonly resourceServerUrl: URL;
 
   constructor(
@@ -334,80 +168,8 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     resourceServerUrl: URL,
   ) {
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
-    const state = readOAuthState(config.statePath);
-    this.clientsStore = new InMemoryOAuthClientsStore(
-      config.allowedRedirectHosts,
-      state.clients,
-      () => this.saveOAuthState(),
-    );
-
-    const now = Math.floor(Date.now() / 1000);
-    for (const record of state.accessTokens) {
-      if (
-        typeof record?.tokenHash !== "string" ||
-        typeof record?.clientId !== "string" ||
-        !Array.isArray(record?.scopes) ||
-        typeof record?.expiresAt !== "number" ||
-        record.expiresAt < now
-      ) {
-        continue;
-      }
-
-      this.accessTokens.set(record.tokenHash, {
-        token: record.tokenHash,
-        clientId: record.clientId,
-        scopes: record.scopes,
-        expiresAt: record.expiresAt,
-        resource: parseStoredResource(record.resource),
-      });
-    }
-
-    for (const record of state.refreshTokens) {
-      if (
-        typeof record?.tokenHash !== "string" ||
-        typeof record?.clientId !== "string" ||
-        !Array.isArray(record?.scopes) ||
-        typeof record?.expiresAt !== "number" ||
-        record.expiresAt < now
-      ) {
-        continue;
-      }
-
-      this.refreshTokens.set(record.tokenHash, {
-        token: record.tokenHash,
-        clientId: record.clientId,
-        scopes: record.scopes,
-        expiresAt: record.expiresAt,
-        resource: parseStoredResource(record.resource),
-      });
-    }
-
-    for (const record of state.approvedConsents) {
-      if (
-        typeof record?.clientId !== "string" ||
-        typeof record?.redirectUri !== "string" ||
-        typeof record?.resource !== "string" ||
-        !Array.isArray(record?.scopes) ||
-        typeof record?.approvedAt !== "number"
-      ) {
-        continue;
-      }
-
-      const client = this.clientsStore.getClient(record.clientId);
-      if (!client || !client.redirect_uris.includes(record.redirectUri)) {
-        continue;
-      }
-
-      this.approvedConsents.set(consentKey(record.clientId, record.redirectUri, record.resource, record.scopes), {
-        clientId: record.clientId,
-        redirectUri: record.redirectUri,
-        resource: record.resource,
-        scopes: normalizeScopes(record.scopes),
-        approvedAt: record.approvedAt,
-      });
-    }
-
-    this.saveOAuthState();
+    this.store = new SqliteOAuthStore(config.statePath);
+    this.clientsStore = new SqliteOAuthClientsStore(config.allowedRedirectHosts, this.store);
   }
 
   async authorize(
@@ -433,7 +195,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     const currentConsentKey = consentKey(client.client_id, params.redirectUri, params.resource.href, scopes);
 
     if (res.req.method !== "POST") {
-      if (this.approvedConsents.has(currentConsentKey)) {
+      if (this.store.getConsent(currentConsentKey)) {
         this.redirectWithAuthorizationCode(client, params, res);
         return;
       }
@@ -465,25 +227,22 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    this.approvedConsents.set(currentConsentKey, {
+    this.store.saveConsent(currentConsentKey, {
       clientId: client.client_id,
       redirectUri: params.redirectUri,
       resource: params.resource.href,
       scopes,
       approvedAt: Math.floor(Date.now() / 1000),
     });
-    this.saveOAuthState();
     this.redirectWithAuthorizationCode(client, params, res);
   }
 
   revokeClientConsent(clientId: string): void {
-    let changed = false;
-    for (const [key, record] of this.approvedConsents.entries()) {
-      if (record.clientId !== clientId) continue;
-      this.approvedConsents.delete(key);
-      changed = true;
-    }
-    if (changed) this.saveOAuthState();
+    this.store.deleteClientConsents(clientId);
+  }
+
+  resetState(): void {
+    this.store.resetState();
   }
 
   private redirectWithAuthorizationCode(
@@ -492,7 +251,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     res: Response,
   ): void {
     const code = `code-${randomUUID()}`;
-    this.codes.set(code, {
+    this.store.saveAuthorizationCode(hashToken(code), {
       clientId: client.client_id,
       params,
       expiresAtMs: Date.now() + CODE_TTL_MS,
@@ -527,7 +286,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new InvalidGrantError("Invalid resource");
     }
 
-    this.codes.delete(authorizationCode);
+    this.store.deleteAuthorizationCode(hashToken(authorizationCode));
     return this.issueTokens(client.client_id, record.params.scopes ?? this.config.scopes, record.params.resource);
   }
 
@@ -537,11 +296,11 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     scopes?: string[],
     resource?: URL,
   ): Promise<OAuthTokens> {
-    const record = this.refreshTokens.get(hashToken(refreshToken));
+    const refreshTokenHash = hashToken(refreshToken);
+    const record = this.store.getRefreshToken(refreshTokenHash);
     if (!record || record.clientId !== client.client_id || record.expiresAt < Math.floor(Date.now() / 1000)) {
       if (record) {
-        this.refreshTokens.delete(hashToken(refreshToken));
-        this.saveOAuthState();
+        this.store.deleteRefreshToken(refreshTokenHash);
       }
       throw new InvalidGrantError("Invalid refresh token");
     }
@@ -554,19 +313,18 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new AccessDeniedError("Refresh token cannot grant requested scopes");
     }
 
-    this.refreshTokens.delete(hashToken(refreshToken));
+    this.store.deleteRefreshToken(refreshTokenHash);
     return this.issueTokens(client.client_id, requestedScopes, resource ?? record.resource);
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const hashed = hashToken(token);
-    const record = this.accessTokens.get(hashed);
+    const record = this.store.getAccessToken(hashed);
     if (!record) {
       throw new InvalidTokenError("Invalid or expired access token");
     }
     if (record.expiresAt < Math.floor(Date.now() / 1000)) {
-      this.accessTokens.delete(hashed);
-      this.saveOAuthState();
+      this.store.deleteAccessToken(hashed);
       throw new InvalidTokenError("Invalid or expired access token");
     }
 
@@ -581,16 +339,14 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
 
   async revokeToken(_client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
     const hashed = hashToken(request.token);
-    this.accessTokens.delete(hashed);
-    this.refreshTokens.delete(hashed);
-    this.saveOAuthState();
+    this.store.revokeToken(hashed);
   }
 
   private validCodeRecord(
     client: OAuthClientInformationFull,
     authorizationCode: string,
   ): AuthorizationCodeRecord {
-    const record = this.codes.get(authorizationCode);
+    const record = this.store.getAuthorizationCode(hashToken(authorizationCode));
     if (!record || record.clientId !== client.client_id || record.expiresAtMs < Date.now()) {
       throw new InvalidGrantError("Invalid authorization code");
     }
@@ -604,21 +360,18 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     const accessExpiresAt = now + this.config.accessTokenTtlSeconds;
     const refreshExpiresAt = now + this.config.refreshTokenTtlSeconds;
 
-    this.accessTokens.set(hashToken(accessToken), {
-      token: accessToken,
+    this.store.saveAccessToken(hashToken(accessToken), {
       clientId,
       scopes,
       expiresAt: accessExpiresAt,
       resource,
     });
-    this.refreshTokens.set(hashToken(refreshToken), {
-      token: refreshToken,
+    this.store.saveRefreshToken(hashToken(refreshToken), {
       clientId,
       scopes,
       expiresAt: refreshExpiresAt,
       resource,
     });
-    this.saveOAuthState();
 
     return {
       access_token: accessToken,
@@ -627,16 +380,6 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       refresh_token: refreshToken,
       scope: scopes.join(" "),
     };
-  }
-
-  private saveOAuthState(): void {
-    writeOAuthState(
-      this.config.statePath,
-      this.clientsStore.dumpClients(),
-      this.accessTokens.entries(),
-      this.refreshTokens.entries(),
-      this.approvedConsents.values(),
-    );
   }
 }
 
@@ -662,8 +405,4 @@ function hashToken(token: string): string {
 
 function normalizeScopes(scopes: string[]): string[] {
   return [...scopes].sort();
-}
-
-function consentKey(clientId: string, redirectUri: string, resource: string, scopes: string[]): string {
-  return `${clientId}\n${redirectUri}\n${resource}\n${normalizeScopes(scopes).join(" ")}`;
 }

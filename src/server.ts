@@ -42,6 +42,13 @@ import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { validateShellCommand } from "./shell-policy.js";
 import { formatPathForPrompt } from "./skills.js";
+import {
+  installSkill,
+  listInstalledSkills,
+  removeInstalledSkill,
+  type InstalledSkillRecord,
+  type SkillInstallSource,
+} from "./skill-manager.js";
 import { contentStats, contentText, toolError, type ToolContent } from "./tool-result.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -217,6 +224,15 @@ const workspaceSkillOutputSchema = z.object({
   name: z.string(),
   description: z.string(),
   path: z.string(),
+});
+
+const installedSkillOutputSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  scope: z.enum(["workspace", "global"]),
+  path: z.string(),
+  removable: z.boolean(),
+  sourceType: z.enum(["workspace-installed", "global-installed"]),
 });
 
 const workspaceAgentsFileOutputSchema = z.object({
@@ -552,8 +568,9 @@ function createMcpServer(
       inputSchema: {
         path: z
           .string()
+          .optional()
           .describe(
-            "Absolute path, or a leading-tilde home path such as ~/project, to a local project directory inside an allowed root.",
+            "Absolute path, or a leading-tilde home path such as ~/project, to a local project directory inside an allowed root. Omit this only when the server session has a configured default workspace.",
           ),
         mode: z
           .enum(["checkout", "worktree"])
@@ -716,6 +733,243 @@ function createMcpServer(
           updatedAt: collaboration.updatedAt || undefined,
         },
       };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "install_skill",
+    {
+      title: "Install skill",
+      description:
+        "Install a third-party skill into the current workspace or the global agent skill directory.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        scope: z.enum(["workspace", "global"]).optional(),
+        source: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("local"),
+            path: z.string(),
+          }),
+          z.object({
+            kind: z.literal("github"),
+            repo: z.string(),
+            path: z.string(),
+            ref: z.string().optional(),
+          }),
+          z.object({
+            kind: z.literal("github_url"),
+            url: z.string(),
+          }),
+        ]),
+      },
+      outputSchema: {
+        result: z.string(),
+        status: z.literal("installed"),
+        scope: z.enum(["workspace", "global"]),
+        skill: installedSkillOutputSchema,
+        sourceSummary: z.string(),
+        visibleInCurrentWorkspace: z.boolean(),
+      },
+      ...toolWidgetDescriptorMeta(config, "workspace"),
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, scope, source }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      try {
+        const installed = await installSkill({
+          config,
+          workspaceRoot: workspace.root,
+          scope: scope ?? "workspace",
+          source: source as SkillInstallSource,
+        });
+        const refreshed = workspaces.refreshWorkspaceSkills(workspaceId);
+        const visible = refreshed.skills.some((skill) => skill.name === installed.name);
+        const content = [textBlock(`Installed skill ${installed.name} (${installed.scope}).`)];
+
+        logToolCall(config, {
+          tool: "install_skill",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: "install_skill",
+            card: {
+              workspaceId,
+              status: "installed",
+              path: installed.path,
+              summary: {
+                scope: installed.scope,
+                visibleInCurrentWorkspace: visible,
+              },
+              payload: { content },
+            },
+          },
+          structuredContent: {
+            result: contentText(content),
+            status: "installed" as const,
+            scope: installed.scope,
+            skill: toInstalledSkillOutput(installed),
+            sourceSummary: installed.sourceSummary,
+            visibleInCurrentWorkspace: visible,
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, {
+          tool: "install_skill",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "list_installed_skills",
+    {
+      title: "List installed skills",
+      description:
+        "List installed skills for the current workspace and optionally the global agent skill directory.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        scope: z.enum(["workspace", "global", "all"]).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        skills: z.array(installedSkillOutputSchema),
+      },
+      ...toolWidgetDescriptorMeta(config, "workspace"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, scope }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      try {
+        const skills = await listInstalledSkills({
+          config,
+          workspaceRoot: workspace.root,
+          scope: scope ?? "workspace",
+        });
+        const content = [textBlock(formatInstalledSkillsList(skills))];
+
+        logToolCall(config, {
+          tool: "list_installed_skills",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: "list_installed_skills",
+            card: {
+              workspaceId,
+              summary: {
+                skills: skills.length,
+              },
+              payload: { content },
+            },
+          },
+          structuredContent: {
+            result: contentText(content),
+            skills: skills.map(toInstalledSkillOutput),
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, {
+          tool: "list_installed_skills",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "remove_skill",
+    {
+      title: "Remove skill",
+      description:
+        "Remove an installed skill from the current workspace or the global agent skill directory.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        scope: z.enum(["workspace", "global"]).optional(),
+        name: z.string(),
+      },
+      outputSchema: {
+        result: z.string(),
+        status: z.literal("removed"),
+        scope: z.enum(["workspace", "global"]),
+        name: z.string(),
+        removedPath: z.string(),
+        visibleInCurrentWorkspace: z.boolean(),
+      },
+      ...toolWidgetDescriptorMeta(config, "workspace"),
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, scope, name }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      try {
+        const removed = await removeInstalledSkill({
+          config,
+          workspaceRoot: workspace.root,
+          scope: scope ?? "workspace",
+          name,
+        });
+        const refreshed = workspaces.refreshWorkspaceSkills(workspaceId);
+        const visible = refreshed.skills.some((skill) => skill.name === removed.name);
+        const content = [textBlock(`Removed skill ${removed.name} (${removed.scope}).`)];
+
+        logToolCall(config, {
+          tool: "remove_skill",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: "remove_skill",
+            card: {
+              workspaceId,
+              status: "removed",
+              path: removed.removedPath,
+              summary: {
+                scope: removed.scope,
+                visibleInCurrentWorkspace: visible,
+              },
+              payload: { content },
+            },
+          },
+          structuredContent: {
+            result: contentText(content),
+            status: "removed" as const,
+            scope: removed.scope,
+            name: removed.name,
+            removedPath: removed.removedPath,
+            visibleInCurrentWorkspace: visible,
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, {
+          tool: "remove_skill",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
     },
   );
 
@@ -2334,7 +2588,7 @@ export function createServer(config = loadConfig()): RunningServer {
     ...(allowedHosts ? { allowedHosts } : {}),
   });
   const transports = new Map<string, Transport>();
-  const mcpUrl = new URL("/mcp", config.publicBaseUrl);
+  const mcpUrl = new URL(config.mcpPath, config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl);
   const bearerAuth = requireBearerAuth({
@@ -2415,7 +2669,7 @@ export function createServer(config = loadConfig()): RunningServer {
     res.json({ ok: true, name: "devspace" });
   });
 
-  app.all("/mcp", async (req, res) => {
+  app.all(config.mcpPath, async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
@@ -2691,6 +2945,24 @@ function toStructuredUserInputRecord(record: WorkspaceUserInputRecord): {
   };
 }
 
+function toInstalledSkillOutput(skill: InstalledSkillRecord) {
+  return {
+    name: skill.name,
+    description: skill.description,
+    scope: skill.scope,
+    path: skill.path,
+    removable: skill.removable,
+    sourceType: skill.sourceType,
+  };
+}
+
+function formatInstalledSkillsList(skills: InstalledSkillRecord[]): string {
+  if (skills.length === 0) return "No installed skills.";
+  return skills
+    .map((skill) => `${skill.name} (${skill.scope})\nPath: ${skill.path}\nDescription: ${skill.description}`)
+    .join("\n\n");
+}
+
 async function isMainModule(): Promise<boolean> {
   if (!process.argv[1]) return false;
 
@@ -2703,7 +2975,7 @@ if (await isMainModule()) {
   const { app, config } = createServer();
   app.listen(config.port, config.host, () => {
     console.log(
-      `devspace listening on http://${config.host}:${config.port}/mcp`,
+      `devspace listening on http://${config.host}:${config.port}${config.mcpPath}`,
     );
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log("auth: oauth owner-token flow required");

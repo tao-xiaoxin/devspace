@@ -510,6 +510,12 @@ function getToolDisplay(card: ToolResultCard): ToolDisplay {
   switch (card.tool) {
     case "open_workspace":
       return { icon: folderIcon(), title: "Workspace", label, tone: "workspace" };
+    case "install_skill":
+      return { icon: filePlusIcon(), title: "Install Skill", label, tone: "write" };
+    case "list_installed_skills":
+      return { icon: filesIcon(), title: "Installed Skills", label, tone: "directory" };
+    case "remove_skill":
+      return { icon: editIcon(), title: "Remove Skill", label, tone: "edit" };
     case "request_user_input":
       return { icon: questionIcon(), title: "Request User Input", label, tone: "directory" };
     case "get_pending_user_input":

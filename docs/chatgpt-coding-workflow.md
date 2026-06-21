@@ -87,6 +87,20 @@ DevSpace discovers skills from:
 - `DEVSPACE_AGENT_DIR`, which defaults to `~/.codex`
 - optional paths from `DEVSPACE_SKILL_PATHS`
 
+User-installed project skills can be managed through DevSpace itself:
+
+```text
+请使用 DevSpace 打开当前项目，然后调用 install_skill，把 GitHub 仓库 openai/skills 里的 skills/.curated/research 安装到当前 workspace。
+```
+
+```text
+请调用 list_installed_skills，列出当前 workspace 的 installed skills。
+```
+
+```text
+请调用 remove_skill，删除当前 workspace 里名为 research 的 installed skill。
+```
+
 When `open_workspace` returns matching skills, the model should read the
 advertised `SKILL.md` before following that skill.
 

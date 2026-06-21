@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
-import { loadDevspaceFiles } from "./user-config.js";
+import { loadDevspaceFiles, normalizeMcpPath } from "./user-config.js";
 
 export type ToolNamingMode = "legacy" | "short";
 export type WidgetMode = "off" | "changes" | "full";
@@ -14,8 +14,12 @@ const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 export interface ServerConfig {
   host: string;
   port: number;
+  mcpPath: string;
   oauth: OAuthConfig;
   allowedRoots: string[];
+  configuredWorkspaces: string[];
+  defaultWorkspace?: string;
+  sessionWorkspace?: string;
   allowedHosts: string[];
   publicBaseUrl: string;
   minimalTools: boolean;
@@ -44,7 +48,7 @@ function parsePort(value: string | number | undefined): number {
 function parseAllowedRoots(value: string | string[] | undefined): string[] {
   if (Array.isArray(value)) {
     const roots = value.map((entry) => entry.trim()).filter(Boolean);
-    return (roots.length > 0 ? roots : [process.cwd()]).map((root) => resolve(expandHomePath(root)));
+    return roots.map((root) => resolve(expandHomePath(root)));
   }
 
   const rawRoots =
@@ -53,8 +57,7 @@ function parseAllowedRoots(value: string | string[] | undefined): string[] {
       .map((entry) => entry.trim())
       .filter(Boolean) ?? [];
 
-  const roots = rawRoots.length > 0 ? rawRoots : [process.cwd()];
-  return roots.map((root) => resolve(expandHomePath(root)));
+  return rawRoots.map((root) => resolve(expandHomePath(root)));
 }
 
 function parseAllowedHosts(value: string | string[] | undefined, derivedHosts: string[]): string[] {
@@ -224,11 +227,21 @@ function defaultAgentDir(): string {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const files = loadDevspaceFiles(env);
-  const host = env.HOST ?? files.config.host ?? "127.0.0.1";
-  const port = parsePort(env.PORT ?? files.config.port);
+  const host = env.HOST ?? files.config.server?.host ?? files.config.host ?? "127.0.0.1";
+  const port = parsePort(env.PORT ?? files.config.server?.port ?? files.config.port);
   const stateDir = resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir()));
+  const mcpPath = normalizeMcpPath(env.DEVSPACE_MCP_PATH ?? files.config.server?.mcpPath);
+  const configuredWorkspaces = parseAllowedRoots(
+    env.DEVSPACE_ALLOWED_ROOTS ?? files.config.workspaces?.allowed ?? files.config.allowedRoots,
+  );
+  const defaultWorkspace = files.config.workspaces?.default
+    ? resolve(expandHomePath(files.config.workspaces.default))
+    : undefined;
+  const sessionWorkspace = env.DEVSPACE_SESSION_WORKSPACE
+    ? resolve(expandHomePath(env.DEVSPACE_SESSION_WORKSPACE))
+    : undefined;
   const publicBaseUrl = parsePublicBaseUrl(
-    env.DEVSPACE_PUBLIC_BASE_URL ?? files.config.publicBaseUrl ?? localPublicBaseUrl(host, port),
+    env.DEVSPACE_PUBLIC_BASE_URL ?? files.config.server?.publicBaseUrl ?? files.config.publicBaseUrl ?? localPublicBaseUrl(host, port),
   );
   const derivedAllowedHosts = [
     "localhost",
@@ -242,8 +255,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     host,
     port,
+    mcpPath,
     oauth: parseOAuthConfig(env, files.auth.ownerToken, stateDir),
-    allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS ?? files.config.allowedRoots),
+    allowedRoots: configuredWorkspaces,
+    configuredWorkspaces,
+    defaultWorkspace,
+    sessionWorkspace,
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,
     minimalTools: parseMinimalTools(env),
