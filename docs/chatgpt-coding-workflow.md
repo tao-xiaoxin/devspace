@@ -14,8 +14,7 @@ ChatGPT should call `open_workspace` once for a project folder:
 }
 ```
 
-The result includes a `workspaceId`. All later file, search, edit, show-changes,
-and shell calls should reuse that same `workspaceId`.
+The result includes a `workspaceId` and a compact `workflowDigest`. All later file, search, edit, show-changes, shell, Skill, Plan, and Goal calls should reuse that same `workspaceId`.
 
 Do not reopen the same folder unless:
 
@@ -79,17 +78,18 @@ new context during later tool calls.
 
 Skills are enabled by default for coding-agent workflows.
 
-DevSpace discovers skills from:
+DevSpace discovers Skills from:
 
-- built-in DevSpace skills
-- workspace-local skills in `skills/local`
-- workspace-installed skills in `skills/installed`
+- DevSpace core workflow Skills in `skills/.system`
+- vendored OpenAI Skills in `skills/.system/openai/skills` when present
+- workspace-local Skills in `skills/local`
+- workspace-installed Skills in `skills/installed`
 - `DEVSPACE_AGENT_DIR`, which defaults to `~/.codex`
 - optional paths from `DEVSPACE_SKILL_PATHS`
 
 ChatGPT Plus on the web cannot natively install or register Codex Skills. In this setup, DevSpace provides MCP-based skill installation, discovery, and resolution.
 
-`@devspace /plan` and `@devspace /goal` are workflow aliases, not native ChatGPT slash commands.
+`@devspace /plan` and `@devspace /goal` are workflow aliases, not native ChatGPT slash commands. `/plan` always resolves to `devspace-plan`; `/goal` always resolves to `devspace-goal`. Vendored and project-local Skills cannot silently override either alias.
 
 User-installed project skills can be managed through DevSpace itself:
 
@@ -117,17 +117,30 @@ User-installed project skills can be managed through DevSpace itself:
 @devspace /goal 将 DevSpace 的第三方 Skill 安装流程收敛为可测试、可回滚、跨平台兼容的实现
 ```
 
-When `open_workspace` returns matching skills, the model should read the
-advertised `SKILL.md` before following that skill.
+`open_workspace` returns core and project Skill metadata only, capped at 24 entries, plus a source-count summary. Use `resolve_skill` to load the full `SKILL.md` once a Skill is selected. Use `search_skills` to discover vendored or additional Skills without loading every Skill instruction into context.
 
-Skill paths may be outside the workspace. DevSpace only permits reading:
+Skill resources use `skill://` locators. DevSpace only permits reading:
 
-- advertised `SKILL.md` files
-- files under a skill directory after that skill's `SKILL.md` has been read
+- a resolved `SKILL.md`
+- files under an activated Skill directory
 
 Set `DEVSPACE_SKILLS=0` to hide skills from workspace output.
 
-The built-in skill layout is inspired by [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills) under the MIT license, with DevSpace-specific adaptations for MCP workflow commands and local coding tasks.
+DevSpace core Skills define the stable `/plan`, `/goal`, workflow recovery, and MCP Tool contracts. Vendored OpenAI Skills are an optional, manually reviewed source and never control the core aliases.
+
+## Project Workflow Store
+
+DevSpace keeps only a small project-scoped workflow state. It is shared by every DevSpace session opened on the same canonical directory, while different project roots and different Git worktree roots stay isolated.
+
+`open_workspace` returns only `workflowDigest`, not Plan history, Goal history, chat transcripts, tool output, or shell logs. Load full state on demand:
+
+- `get_plan`: current Plan, step states, validation, risks, and revision
+- `get_goal`: current Goal, criteria, verification, stop conditions, summary, and revision
+- `get_workflow_history`: concise paginated status events; default 20, maximum 50
+
+Create a Plan with `update_plan(expectedRevision=0, ...)`. For an existing Plan or Goal, first call `get_plan` or `get_goal`, then pass the returned `expectedRevision`. A conflict means another session updated state first; reload and merge rather than overwriting it.
+
+`plan` mode is a planning preference, not a permission boundary. It permits `update_plan` but should not perform project file changes until the user approves execution.
 
 ## Tool Names
 

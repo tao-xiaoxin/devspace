@@ -42,9 +42,9 @@ import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { validateShellCommand } from "./shell-policy.js";
 import {
-  formatPathForPrompt,
   resolveSkillDefinition,
   skillSourceLabel,
+  type DevSpaceSkill,
   type SkillResolveMode,
   type SkillSource,
 } from "./skills.js";
@@ -55,12 +55,7 @@ import {
   type InstalledSkillRecord,
   type SkillInstallSource,
 } from "./skill-manager.js";
-import {
-  normalizeGoalDefinition,
-  parseGoalDefinition,
-  serializeGoalDefinition,
-  type GoalDefinition,
-} from "./goal-definition.js";
+import { normalizeGoalDefinition } from "./goal-definition.js";
 import { contentStats, contentText, toolError, type ToolContent } from "./tool-result.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -68,9 +63,12 @@ import { serverInstructions as buildServerInstructions, workspaceInstruction } f
 import { parseAnswerTextOrThrow, parseWorkspaceCommand } from "./workspace-commands.js";
 import { applyWorkspacePatch, gitPush } from "./workspace-operations.js";
 import type {
-  WorkspaceStore,
+  WorkflowDigest,
+  WorkspaceGoal,
+  WorkspacePlan,
   WorkspacePlanStep,
   WorkspaceQuestion,
+  WorkspaceStore,
   WorkspaceUserInputAnswer,
   WorkspaceUserInputRecord,
 } from "./workspace-store.js";
@@ -78,6 +76,7 @@ import type {
 type Transport = StreamableHTTPServerTransport;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
+const MAX_OPEN_WORKSPACE_SKILLS = 24;
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: true,
@@ -232,11 +231,20 @@ function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   };
 }
 
+const skillSourceOutputSchema = z.enum([
+  "devspace_system",
+  "local",
+  "legacy_core",
+  "installed",
+  "official_vendored",
+  "global",
+]);
+
 const workspaceSkillOutputSchema = z.object({
   name: z.string(),
   description: z.string(),
   path: z.string(),
-  source: z.enum(["system", "local", "installed", "global"]),
+  source: skillSourceOutputSchema,
 });
 
 const installedSkillOutputSchema = z.object({
@@ -250,23 +258,113 @@ const installedSkillOutputSchema = z.object({
 
 const resolvedSkillOutputSchema = z.object({
   name: z.string(),
-  source: z.enum(["system", "local", "installed", "global"]),
+  qualifiedId: z.string(),
+  source: skillSourceOutputSchema,
   path: z.string(),
   alias: z.string().optional(),
   mode: z.enum(["read_only", "normal"]),
   instructions: z.string(),
 });
 
-const goalDefinitionOutputSchema = z.object({
+const workflowScopeOutputSchema = z.object({
+  in: z.array(z.string()),
+  out: z.array(z.string()),
+});
+
+const workflowPlanStepOutputSchema = z.object({
+  id: z.string().optional(),
+  step: z.string(),
+  status: z.enum(["pending", "in_progress", "blocked", "completed", "skipped"]),
+  note: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
+const workflowPlanOutputSchema = z.object({
+  id: z.string(),
+  projectWorkflowKey: z.string(),
+  goalId: z.string().optional(),
+  title: z.string(),
+  summary: z.string().optional(),
+  scope: workflowScopeOutputSchema,
+  validation: z.array(z.string()),
+  risks: z.array(z.string()),
+  status: z.enum(["draft", "active", "completed", "archived"]),
+  revision: z.number().int().positive(),
+  steps: z.array(workflowPlanStepOutputSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().optional(),
+});
+
+const goalTokenUsageOutputSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  reasoningTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  reportCount: z.number().int().nonnegative(),
+  lastReportedAt: z.string().optional(),
+});
+
+const goalWorkDurationOutputSchema = z.object({
+  running: z.boolean(),
+  startedAt: z.string().optional(),
+  accumulatedMilliseconds: z.number().int().nonnegative(),
+  liveMilliseconds: z.number().int().nonnegative(),
+  totalMilliseconds: z.number().int().nonnegative(),
+  measuredAt: z.string(),
+});
+
+const goalProgressOutputSchema = z.object({
+  source: z.enum(["linked_plan_steps", "unlinked"]),
+  completedSteps: z.number().int().nonnegative(),
+  totalSteps: z.number().int().nonnegative(),
+  exactFraction: z.string().optional(),
+  percentageNumerator: z.number().int().nonnegative().optional(),
+  percentageDenominator: z.number().int().positive().optional(),
+  displayPercent: z.string().optional(),
+});
+
+const goalMetricsOutputSchema = z.object({
+  tokenUsage: goalTokenUsageOutputSchema,
+  workDuration: goalWorkDurationOutputSchema,
+  progress: goalProgressOutputSchema,
+  updatedAt: z.string().optional(),
+});
+
+const workflowGoalOutputSchema = z.object({
+  id: z.string(),
+  projectWorkflowKey: z.string(),
   objective: z.string(),
-  scope: z
+  scope: workflowScopeOutputSchema,
+  successCriteria: z.array(z.string()),
+  verification: z.array(z.string()),
+  stopConditions: z.array(z.string()),
+  currentSummary: z.string().optional(),
+  status: z.enum(["active", "blocked", "completed", "archived"]),
+  revision: z.number().int().positive(),
+  metrics: goalMetricsOutputSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().optional(),
+});
+
+const workflowDigestOutputSchema = z.object({
+  projectWorkflowKey: z.string(),
+  hasActiveGoal: z.boolean(),
+  goalStatus: z.enum(["active", "blocked", "completed", "archived"]).optional(),
+  goalTitle: z.string().optional(),
+  hasActivePlan: z.boolean(),
+  planStatus: z.enum(["draft", "active", "completed", "archived"]).optional(),
+  planRevision: z.number().int().positive().optional(),
+  steps: z
     .object({
-      in: z.array(z.string()),
-      out: z.array(z.string()),
+      total: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      inProgress: z.number().int().nonnegative(),
+      blocked: z.number().int().nonnegative(),
     })
     .optional(),
-  verification: z.array(z.string()).optional(),
-  stopConditions: z.array(z.string()).optional(),
+  lastUpdatedAt: z.string().optional(),
 });
 
 const workspaceAgentsFileOutputSchema = z.object({
@@ -635,9 +733,15 @@ function createMcpServer(
         agentsFiles: z.array(workspaceAgentsFileOutputSchema),
         availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema),
         skills: z.array(workspaceSkillOutputSchema),
+        skillsTruncated: z.boolean(),
         skillDiagnostics: z.array(z.unknown()),
         instruction: z.string(),
         collaborationMode: z.enum(["default", "plan"]),
+        workflowDigest: workflowDigestOutputSchema,
+        skillSummary: z.object({
+          total: z.number().int().nonnegative(),
+          bySource: z.record(skillSourceOutputSchema, z.number().int().nonnegative()),
+        }),
       },
       ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
@@ -651,14 +755,25 @@ function createMcpServer(
           root: workspace.root,
         });
       }
-      const visibleSkills = workspace.skills
+      const discoverableSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
+        .filter((skill) => (
+          skill.source === "devspace_system" ||
+          skill.source === "local" ||
+          skill.source === "legacy_core" ||
+          skill.source === "installed"
+        ))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      const skillsTruncated = discoverableSkills.length > MAX_OPEN_WORKSPACE_SKILLS;
+      const visibleSkills = discoverableSkills
+        .slice(0, MAX_OPEN_WORKSPACE_SKILLS)
         .map((skill) => ({
           name: skill.name,
           description: skill.description,
-          path: formatPathForPrompt(skill.filePath),
+          path: skill.locator,
           source: skill.source,
         }));
+      const skillSummary = summarizeSkills(workspace.skills);
       const loadedAgentsFiles = agentsFiles.map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
         content: file.content,
@@ -667,6 +782,7 @@ function createMcpServer(
         path: formatAgentsPath(file.path, workspace.root),
       }));
       const collaboration = workspaceStore.getCollaborationMode(workspace.id);
+      const workflowDigest = workspaceStore.getWorkflowDigest(workspace.id);
       const instruction = workspaceInstruction(collaboration.mode, config.skillsEnabled);
       const resultContent: ToolContent[] = [
         {
@@ -682,8 +798,9 @@ function createMcpServer(
               ? `Available nested instructions: ${availableAgentsFileOutputs.map((file) => file.path).join(", ")}`
               : undefined,
             visibleSkills.length > 0
-              ? `Available skills: ${visibleSkills.map((skill) => skill.name).join(", ")}`
+              ? `Available core and project skills: ${visibleSkills.map((skill) => skill.name).join(", ")}${skillsTruncated ? ` (showing first ${MAX_OPEN_WORKSPACE_SKILLS}; use search_skills for more)` : ""}`
               : undefined,
+            `Workflow: ${formatWorkflowDigest(workflowDigest)}`,
             instruction,
           ].filter(Boolean).join("\n"),
         },
@@ -707,8 +824,11 @@ function createMcpServer(
             summary: {
               agentsFiles: loadedAgentsFiles.length,
               availableAgentsFiles: availableAgentsFileOutputs.length,
-              skills: visibleSkills.length,
+              skills: skillSummary.total,
+              visibleSkills: visibleSkills.length,
+              skillsTruncated,
               skillDiagnostics: workspace.skillDiagnostics.length,
+              workflow: workflowDigest,
             },
           },
         },
@@ -721,9 +841,12 @@ function createMcpServer(
           agentsFiles: loadedAgentsFiles,
           availableAgentsFiles: availableAgentsFileOutputs,
           skills: visibleSkills,
+          skillsTruncated,
           skillDiagnostics: workspace.skillDiagnostics,
           instruction,
           collaborationMode: collaboration.mode,
+          workflowDigest,
+          skillSummary,
         },
       };
     },
@@ -738,7 +861,7 @@ function createMcpServer(
         "Resolve a skill name or alias such as /plan or /goal for the current workspace. This tool only reads and returns skill instructions; it does not execute installation, file changes, or commands.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
-        nameOrAlias: z.string().describe("Skill name or alias such as create-plan, define-goal, /plan, or /goal."),
+        nameOrAlias: z.string().describe("Skill name, qualifiedId, or alias such as devspace-plan, openai:.curated/define-goal, /plan, or /goal."),
       },
       outputSchema: {
         result: z.string(),
@@ -780,6 +903,7 @@ function createMcpServer(
             result: contentText(content),
             skill: {
               name: resolved.name,
+              qualifiedId: resolved.qualifiedId,
               source: resolved.source,
               path: resolved.path,
               alias: resolved.alias,
@@ -794,6 +918,66 @@ function createMcpServer(
           tool: "resolve_skill",
           workspaceId,
         }, response.content, startedAt);
+        return response;
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "search_skills",
+    {
+      title: "Search skills",
+      description:
+        "Search available DevSpace, project, installed, global, and vendored OpenAI Skills without loading their full instructions. Resolve a returned qualifiedId only when the task needs that Skill.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        query: z.string().optional().describe("Case-insensitive name or description search."),
+        source: skillSourceOutputSchema.optional(),
+        limit: z.number().int().positive().max(50).optional(),
+        cursor: z.string().optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        skills: z.array(z.object({
+          qualifiedId: z.string(),
+          name: z.string(),
+          description: z.string(),
+          source: skillSourceOutputSchema,
+          locator: z.string(),
+        })),
+        nextCursor: z.string().optional(),
+      },
+      ...toolWidgetDescriptorMeta(config, "workspace"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, query, source, limit, cursor }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      try {
+        const page = searchWorkspaceSkills(workspace.skills, { query, source, limit, cursor });
+        const content = [textBlock(
+          page.skills.length === 0
+            ? "No matching skills."
+            : page.skills.map((skill) => `${skill.qualifiedId} — ${skill.description}`).join("\n"),
+        )];
+        logToolCall(config, {
+          tool: "search_skills",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            skills: page.skills,
+            nextCursor: page.nextCursor,
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "search_skills", workspaceId }, response.content, startedAt);
         return response;
       }
     },
@@ -1171,7 +1355,8 @@ function createMcpServer(
 
       if (parsed.kind === "plan") {
         const resolved = await resolveSkillDefinition(workspace.skills, "/plan");
-        const content = [textBlock(`Resolved /plan to ${resolved.name} (${skillSourceLabel(resolved.source)}).`)];
+        workspaceStore.setCollaborationMode({ workspaceSessionId: workspaceId, mode: "plan" });
+        const content = [textBlock(`Resolved /plan to ${resolved.name} (${skillSourceLabel(resolved.source)}) and enabled plan mode.`)];
         logToolCall(config, {
           tool: "handle_workspace_command",
           workspaceId,
@@ -1186,6 +1371,7 @@ function createMcpServer(
             command: "plan" as const,
             skill: {
               name: resolved.name,
+              qualifiedId: resolved.qualifiedId,
               source: resolved.source,
               path: resolved.path,
               alias: resolved.alias,
@@ -1213,6 +1399,7 @@ function createMcpServer(
             command: "goal" as const,
             skill: {
               name: resolved.name,
+              qualifiedId: resolved.qualifiedId,
               source: resolved.source,
               path: resolved.path,
               alias: resolved.alias,
@@ -1596,80 +1783,116 @@ function createMcpServer(
 
   registerAppTool(
     server,
-    "update_plan",
+    "get_plan",
     {
-      title: "Update plan",
+      title: "Get plan",
       description:
-        "Store or replace a workspace-scoped execution plan. Use this when the task benefits from a short checklist with pending, in-progress, and completed steps.",
+        "Get the current project-scoped Plan. Use this after opening a workspace or before changing a persisted plan so you have the latest revision.",
       inputSchema: {
-        workspaceId: z
-          .string()
-          .describe("Workspace identifier returned by open_workspace."),
-        explanation: z
-          .string()
-          .optional()
-          .describe("Optional short explanation for this plan update."),
-        plan: z
-          .array(
-            z.object({
-              step: z.string().describe("Concrete plan step."),
-              status: z.enum(["pending", "in_progress", "completed"]),
-            }),
-          )
-          .min(1)
-          .describe("Current workspace plan. At most one step may be in_progress."),
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
       },
       outputSchema: {
         result: z.string(),
-        explanation: z.string().optional(),
-        plan: z.array(
-          z.object({
-            step: z.string(),
-            status: z.enum(["pending", "in_progress", "completed"]),
-          }),
-        ),
-        updatedAt: z.string(),
+        plan: workflowPlanOutputSchema.nullable(),
       },
       ...toolWidgetDescriptorMeta(config, "plan"),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: true },
     },
-    async ({ workspaceId, explanation, plan }) => {
+    async ({ workspaceId }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
-      const collaboration = workspaceStore.getCollaborationMode(workspaceId);
-      if (collaboration.mode === "plan") {
-        const response = toolError("update_plan is unavailable while the workspace is in plan mode. Use request_user_input, repository exploration, and concrete planning instead.");
-        logFailedToolResponse(config, {
-          tool: "update_plan",
-          workspaceId,
-        }, response.content, startedAt);
-        return response;
-      }
-
-      validatePlanSteps(plan);
-      const saved = workspaceStore.savePlan({
-        workspaceSessionId: workspaceId,
-        explanation,
-        steps: plan,
-      });
-      const content = [textBlock(formatPlanResult(saved.steps, saved.explanation))];
-
+      const plan = workspaceStore.getPlan(workspaceId);
+      const content = [textBlock(plan ? formatPlanResult(plan) : "No current Plan for this project.")];
       logToolCall(config, {
-        tool: "update_plan",
+        tool: "get_plan",
         workspaceId,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
-
       return {
         content,
         structuredContent: {
           result: contentText(content),
-          explanation: saved.explanation,
-          plan: saved.steps,
-          updatedAt: saved.updatedAt,
+          plan: plan ? toStructuredPlan(plan) : null,
         },
       };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "update_plan",
+    {
+      title: "Update plan",
+      description:
+        "Create or update the current project-scoped Plan. Pass expectedRevision=0 to create a Plan; otherwise pass the revision returned by get_plan. This works in both default and plan mode.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        expectedRevision: z.number().int().nonnegative().describe("0 creates a new Plan; otherwise the current Plan revision."),
+        title: z.string().optional(),
+        summary: z.string().optional(),
+        scope: workflowScopeOutputSchema.optional(),
+        validation: z.array(z.string()).optional(),
+        risks: z.array(z.string()).optional(),
+        status: z.enum(["draft", "active", "completed", "archived"]).optional(),
+        goalId: z.string().optional(),
+        plan: z
+          .array(
+            z.object({
+              id: z.string().optional(),
+              step: z.string().describe("Concrete plan step."),
+              status: z.enum(["pending", "in_progress", "blocked", "completed", "skipped"]),
+              note: z.string().optional(),
+            }),
+          )
+          .min(1)
+          .max(100)
+          .describe("The complete current Plan step list. At most one step may be in_progress."),
+      },
+      outputSchema: {
+        result: z.string(),
+        plan: workflowPlanOutputSchema,
+      },
+      ...toolWidgetDescriptorMeta(config, "plan"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ workspaceId, expectedRevision, title, summary, scope, validation, risks, status, goalId, plan }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      try {
+        validatePlanSteps(plan);
+        const saved = workspaceStore.savePlan({
+          workspaceSessionId: workspaceId,
+          expectedRevision,
+          title,
+          summary,
+          scopeIn: scope?.in,
+          scopeOut: scope?.out,
+          validation,
+          risks,
+          status,
+          goalId,
+          steps: plan,
+        });
+        const content = [textBlock(formatPlanResult(saved))];
+        logToolCall(config, {
+          tool: "update_plan",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            plan: toStructuredPlan(saved),
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "update_plan", workspaceId }, response.content, startedAt);
+        return response;
+      }
     },
   );
 
@@ -1679,30 +1902,13 @@ function createMcpServer(
     {
       title: "Get goal",
       description:
-        "Get the current workspace-scoped goal if one exists, including objective, status, and timestamps.",
+        "Get the current project-scoped Goal, including its scope, acceptance criteria, verification, summary, status, and revision.",
       inputSchema: {
-        workspaceId: z
-          .string()
-          .describe("Workspace identifier returned by open_workspace."),
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
       },
       outputSchema: {
         result: z.string(),
-        goal: z
-          .object({
-            objective: z.string(),
-            scope: goalDefinitionOutputSchema.shape.scope,
-            verification: goalDefinitionOutputSchema.shape.verification,
-            stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
-            legacy: z.boolean().optional(),
-            status: z.enum(["active", "complete", "blocked"]),
-            tokenBudget: z.number().int().positive().optional(),
-            createdAt: z.string(),
-            updatedAt: z.string(),
-            timeUsedSeconds: z.number().int().nonnegative(),
-            completedAt: z.string().optional(),
-            blockedAt: z.string().optional(),
-          })
-          .nullable(),
+        goal: workflowGoalOutputSchema.nullable(),
       },
       ...toolWidgetDescriptorMeta(config, "goal"),
       annotations: { readOnlyHint: true },
@@ -1711,36 +1917,18 @@ function createMcpServer(
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
       const goal = workspaceStore.getGoal(workspaceId);
-      const parsedGoal = goal ? parseGoalDefinition(goal.objective) : null;
-      const content = [textBlock(goal ? formatGoalResult(goal) : "No active or historical goal for this workspace.")];
-
+      const content = [textBlock(goal ? formatGoalResult(goal) : "No current Goal for this project.")];
       logToolCall(config, {
         tool: "get_goal",
         workspaceId,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
-
       return {
         content,
         structuredContent: {
           result: contentText(content),
-          goal: goal
-            ? {
-                objective: parsedGoal?.definition.objective ?? goal.objective,
-                scope: parsedGoal?.definition.scope,
-                verification: parsedGoal?.definition.verification,
-                stopConditions: parsedGoal?.definition.stopConditions,
-                legacy: parsedGoal?.legacy,
-                status: goal.status,
-                tokenBudget: goal.tokenBudget,
-                createdAt: goal.createdAt,
-                updatedAt: goal.updatedAt,
-                timeUsedSeconds: goal.timeUsedSeconds,
-                completedAt: goal.completedAt,
-                blockedAt: goal.blockedAt,
-              }
-            : null,
+          goal: goal ? toStructuredGoal(goal) : null,
         },
       };
     },
@@ -1752,79 +1940,62 @@ function createMcpServer(
     {
       title: "Create goal",
       description:
-        "Create a new workspace-scoped goal. Fails if an active goal already exists for that workspace.",
+        "Create a new current Goal for this project. It fails when an active Goal already exists; inspect and explicitly update or archive that Goal first.",
       inputSchema: {
-        workspaceId: z
-          .string()
-          .describe("Workspace identifier returned by open_workspace."),
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
         objective: z.string().describe("Concrete objective to pursue."),
-        scope: goalDefinitionOutputSchema.shape.scope.optional(),
-        verification: goalDefinitionOutputSchema.shape.verification,
-        stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
-        tokenBudget: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("Optional positive token budget for the goal."),
+        scope: workflowScopeOutputSchema.optional(),
+        successCriteria: z.array(z.string()).optional(),
+        verification: z.array(z.string()).optional(),
+        stopConditions: z.array(z.string()).optional(),
+        currentSummary: z.string().optional(),
       },
       outputSchema: {
         result: z.string(),
-        goal: z.object({
-          objective: z.string(),
-          scope: goalDefinitionOutputSchema.shape.scope,
-          verification: goalDefinitionOutputSchema.shape.verification,
-          stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
-          status: z.literal("active"),
-          tokenBudget: z.number().int().positive().optional(),
-          createdAt: z.string(),
-          updatedAt: z.string(),
-          timeUsedSeconds: z.number().int().nonnegative(),
-        }),
+        goal: workflowGoalOutputSchema,
       },
       ...toolWidgetDescriptorMeta(config, "goal"),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ workspaceId, objective, scope, verification, stopConditions, tokenBudget }) => {
+    async ({ workspaceId, objective, scope, successCriteria, verification, stopConditions, currentSummary }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
-      const definition = normalizeGoalDefinition({
-        objective,
-        scope,
-        verification,
-        stopConditions,
-      });
-      const goal = workspaceStore.saveGoal({
-        workspaceSessionId: workspaceId,
-        objective: serializeGoalDefinition(definition),
-        tokenBudget,
-      });
-      const content = [textBlock(formatGoalResult(goal))];
-
-      logToolCall(config, {
-        tool: "create_goal",
-        workspaceId,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-
-      return {
-        content,
-        structuredContent: {
-          result: contentText(content),
-          goal: {
-            objective: definition.objective,
-            scope: definition.scope,
-            verification: definition.verification,
-            stopConditions: definition.stopConditions,
-            status: goal.status,
-            tokenBudget: goal.tokenBudget,
-            createdAt: goal.createdAt,
-            updatedAt: goal.updatedAt,
-            timeUsedSeconds: goal.timeUsedSeconds,
+      try {
+        const definition = normalizeGoalDefinition({
+          objective,
+          scope,
+          verification,
+          stopConditions,
+        });
+        const goal = workspaceStore.saveGoal({
+          workspaceSessionId: workspaceId,
+          objective: definition.objective,
+          scopeIn: definition.scope?.in,
+          scopeOut: definition.scope?.out,
+          successCriteria,
+          verification: definition.verification,
+          stopConditions: definition.stopConditions,
+          currentSummary,
+        });
+        const content = [textBlock(formatGoalResult(goal))];
+        logToolCall(config, {
+          tool: "create_goal",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            goal: toStructuredGoal(goal),
           },
-        },
-      };
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "create_goal", workspaceId }, response.content, startedAt);
+        return response;
+      }
     },
   );
 
@@ -1834,90 +2005,285 @@ function createMcpServer(
     {
       title: "Update goal",
       description:
-        "Update the current workspace-scoped goal with lightweight objective, scope, verification, or status changes.",
+        "Update the current project-scoped Goal. Pass the revision returned by get_goal to prevent another session from silently overwriting this Goal.",
       inputSchema: {
-        workspaceId: z
-          .string()
-          .describe("Workspace identifier returned by open_workspace."),
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        expectedRevision: z.number().int().positive(),
         objective: z.string().optional(),
-        scope: goalDefinitionOutputSchema.shape.scope.optional(),
-        verification: goalDefinitionOutputSchema.shape.verification,
-        stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
-        status: z.enum(["active", "complete", "blocked"]).optional(),
+        scope: workflowScopeOutputSchema.optional(),
+        successCriteria: z.array(z.string()).optional(),
+        verification: z.array(z.string()).optional(),
+        stopConditions: z.array(z.string()).optional(),
+        currentSummary: z.string().optional(),
+        status: z.enum(["active", "blocked", "completed", "archived"]).optional(),
       },
       outputSchema: {
         result: z.string(),
-        goal: z.object({
-          objective: z.string(),
-          scope: goalDefinitionOutputSchema.shape.scope,
-          verification: goalDefinitionOutputSchema.shape.verification,
-          stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
-          legacy: z.boolean().optional(),
-          status: z.enum(["active", "complete", "blocked"]),
-          tokenBudget: z.number().int().positive().optional(),
-          createdAt: z.string(),
-          updatedAt: z.string(),
-          timeUsedSeconds: z.number().int().nonnegative(),
-          completedAt: z.string().optional(),
-          blockedAt: z.string().optional(),
-        }),
+        goal: workflowGoalOutputSchema,
       },
       ...toolWidgetDescriptorMeta(config, "goal"),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ workspaceId, objective, scope, verification, stopConditions, status }) => {
+    async ({ workspaceId, expectedRevision, objective, scope, successCriteria, verification, stopConditions, currentSummary, status }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
-      const existing = workspaceStore.getGoal(workspaceId);
-      if (!existing) {
-        const response = toolError("No goal exists for this workspace.");
-        logFailedToolResponse(config, {
+      try {
+        const goal = workspaceStore.updateGoal({
+          workspaceSessionId: workspaceId,
+          expectedRevision,
+          objective,
+          scopeIn: scope?.in,
+          scopeOut: scope?.out,
+          successCriteria,
+          verification,
+          stopConditions,
+          currentSummary,
+          status,
+        });
+        const content = [textBlock(formatGoalResult(goal))];
+        logToolCall(config, {
           tool: "update_goal",
           workspaceId,
-        }, response.content, startedAt);
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            goal: toStructuredGoal(goal),
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "update_goal", workspaceId }, response.content, startedAt);
         return response;
       }
-      const current = parseGoalDefinition(existing.objective);
-      const definition = normalizeGoalDefinition({
-        objective: objective ?? current.definition.objective,
-        scope: scope ?? current.definition.scope,
-        verification: verification ?? current.definition.verification,
-        stopConditions: stopConditions ?? current.definition.stopConditions,
-      });
-      const goal = workspaceStore.updateGoal({
-        workspaceSessionId: workspaceId,
-        objective: serializeGoalDefinition(definition),
-        status,
-      });
-      const content = [textBlock(formatGoalResult(goal, status === "complete"))];
+    },
+  );
 
-      logToolCall(config, {
-        tool: "update_goal",
-        workspaceId,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-
-      return {
-        content,
-        structuredContent: {
-          result: contentText(content),
-          goal: {
-            objective: definition.objective,
-            scope: definition.scope,
-            verification: definition.verification,
-            stopConditions: definition.stopConditions,
-            legacy: false,
-            status: goal.status,
-            tokenBudget: goal.tokenBudget,
-            createdAt: goal.createdAt,
-            updatedAt: goal.updatedAt,
-            timeUsedSeconds: goal.timeUsedSeconds,
-            completedAt: goal.completedAt,
-            blockedAt: goal.blockedAt,
+  registerAppTool(
+    server,
+    "start_goal_work",
+    {
+      title: "Start goal work timer",
+      description:
+        "Start the server-authoritative work timer for the active Goal. The duration measures only wall-clock time while this explicit timer is running; it is not inferred from chat activity.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+      },
+      outputSchema: {
+        result: z.string(),
+        started: z.boolean(),
+        metrics: goalMetricsOutputSchema,
+      },
+      ...toolWidgetDescriptorMeta(config, "goal"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ workspaceId }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      try {
+        const result = workspaceStore.startGoalWork({ workspaceSessionId: workspaceId });
+        const content = [textBlock(
+          result.started
+            ? `Started Goal work timer. Exact tracked duration is now ${result.metrics.workDuration.totalMilliseconds} ms.`
+            : `Goal work timer is already running since ${result.metrics.workDuration.startedAt ?? "an unknown time"}.`,
+        )];
+        logToolCall(config, {
+          tool: "start_goal_work",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            started: result.started,
+            metrics: result.metrics,
           },
-        },
-      };
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "start_goal_work", workspaceId }, response.content, startedAt);
+        return response;
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "pause_goal_work",
+    {
+      title: "Pause goal work timer",
+      description:
+        "Pause the server-authoritative work timer for the current Goal and persist the exact elapsed milliseconds. This is safe to call when the timer is already paused.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+      },
+      outputSchema: {
+        result: z.string(),
+        paused: z.boolean(),
+        metrics: goalMetricsOutputSchema,
+      },
+      ...toolWidgetDescriptorMeta(config, "goal"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ workspaceId }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      try {
+        const result = workspaceStore.pauseGoalWork({ workspaceSessionId: workspaceId });
+        const content = [textBlock(
+          result.paused
+            ? `Paused Goal work timer at ${result.metrics.workDuration.totalMilliseconds} ms.`
+            : `Goal work timer was already paused at ${result.metrics.workDuration.totalMilliseconds} ms.`,
+        )];
+        logToolCall(config, {
+          tool: "pause_goal_work",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            paused: result.paused,
+            metrics: result.metrics,
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "pause_goal_work", workspaceId }, response.content, startedAt);
+        return response;
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "record_goal_token_usage",
+    {
+      title: "Record provider token usage",
+      description:
+        "Append exact provider-reported token usage to the current Goal. Call only with counts and request IDs returned by the model provider or API; never estimate tokens from text, timing, or context length. Duplicate provider request IDs are ignored.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        provider: z.string().min(1).max(512).describe("Provider that returned the usage record."),
+        providerRequestId: z.string().min(1).max(2048).describe("Stable provider request or response ID used for deduplication."),
+        model: z.string().max(512).optional(),
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        reasoningTokens: z.number().int().nonnegative().optional(),
+        totalTokens: z.number().int().nonnegative().describe("Exact total reported by the provider."),
+        providerReportedAt: z.string().datetime().optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        recorded: z.boolean(),
+        metrics: goalMetricsOutputSchema,
+      },
+      ...toolWidgetDescriptorMeta(config, "goal"),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ workspaceId, provider, providerRequestId, model, inputTokens, outputTokens, reasoningTokens, totalTokens, providerReportedAt }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      try {
+        const result = workspaceStore.recordGoalTokenUsage({
+          workspaceSessionId: workspaceId,
+          provider,
+          providerRequestId,
+          model,
+          inputTokens,
+          outputTokens,
+          reasoningTokens,
+          totalTokens,
+          providerReportedAt,
+        });
+        const content = [textBlock(
+          result.recorded
+            ? `Recorded exact provider-reported usage. Goal total is ${result.metrics.tokenUsage.totalTokens} tokens across ${result.metrics.tokenUsage.reportCount} reports.`
+            : "This provider request ID was already recorded; Goal token totals were not changed.",
+        )];
+        logToolCall(config, {
+          tool: "record_goal_token_usage",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            recorded: result.recorded,
+            metrics: result.metrics,
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "record_goal_token_usage", workspaceId }, response.content, startedAt);
+        return response;
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "get_workflow_history",
+    {
+      title: "Get workflow history",
+      description:
+        "Read concise project workflow events without loading Plan, Goal, chat, or tool-output history. Results are paginated and capped at 50 events.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        limit: z.number().int().positive().max(50).optional(),
+        cursor: z.string().optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        events: z.array(z.object({
+          id: z.string(),
+          projectWorkflowKey: z.string(),
+          entityType: z.enum(["plan", "goal", "mode"]),
+          entityId: z.string(),
+          eventType: z.string(),
+          summary: z.string(),
+          revision: z.number().int().positive().optional(),
+          createdAt: z.string(),
+        })),
+        nextCursor: z.string().optional(),
+      },
+      ...toolWidgetDescriptorMeta(config, "workspace"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, limit, cursor }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      try {
+        const history = workspaceStore.getWorkflowHistory({ workspaceSessionId: workspaceId, limit, cursor });
+        const content = [textBlock(formatWorkflowHistory(history.events))];
+        logToolCall(config, {
+          tool: "get_workflow_history",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return {
+          content,
+          structuredContent: {
+            result: contentText(content),
+            events: history.events,
+            nextCursor: history.nextCursor,
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, { tool: "get_workflow_history", workspaceId }, response.content, startedAt);
+        return response;
+      }
     },
   );
 
@@ -2927,11 +3293,68 @@ function validateSubmittedAnswers(
   }
 }
 
-function formatPlanResult(steps: WorkspacePlanStep[], explanation: string | undefined): string {
-  const summary = steps
-    .map((step) => `${step.status === "completed" ? "[done]" : step.status === "in_progress" ? "[doing]" : "[todo]"} ${step.step}`)
-    .join("\n");
-  return explanation ? `${explanation}\n${summary}` : summary;
+function formatPlanResult(plan: WorkspacePlan): string {
+  const lines = [
+    `Plan: ${plan.title}`,
+    plan.summary,
+    `Status: ${plan.status} (revision ${plan.revision})`,
+    plan.scopeIn.length || plan.scopeOut.length
+      ? `Scope: In(${plan.scopeIn.join("; ") || "none"}) / Out(${plan.scopeOut.join("; ") || "none"})`
+      : undefined,
+    plan.validation.length ? `Validation: ${plan.validation.join("; ")}` : undefined,
+    plan.risks.length ? `Risks: ${plan.risks.join("; ")}` : undefined,
+    ...plan.steps.map((step) => `${planStepMarker(step.status)} ${step.step}${step.note ? ` — ${step.note}` : ""}`),
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function planStepMarker(status: WorkspacePlanStep["status"]): string {
+  switch (status) {
+    case "completed":
+      return "[done]";
+    case "in_progress":
+      return "[doing]";
+    case "blocked":
+      return "[blocked]";
+    case "skipped":
+      return "[skipped]";
+    default:
+      return "[todo]";
+  }
+}
+
+function toStructuredPlan(plan: WorkspacePlan): {
+  id: string;
+  projectWorkflowKey: string;
+  goalId?: string;
+  title: string;
+  summary?: string;
+  scope: { in: string[]; out: string[] };
+  validation: string[];
+  risks: string[];
+  status: WorkspacePlan["status"];
+  revision: number;
+  steps: WorkspacePlanStep[];
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+} {
+  return {
+    id: plan.id,
+    projectWorkflowKey: plan.projectWorkflowKey,
+    goalId: plan.goalId,
+    title: plan.title,
+    summary: plan.summary,
+    scope: { in: plan.scopeIn, out: plan.scopeOut },
+    validation: plan.validation,
+    risks: plan.risks,
+    status: plan.status,
+    revision: plan.revision,
+    steps: plan.steps,
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt,
+    archivedAt: plan.archivedAt,
+  };
 }
 
 function toElicitationSchema(questions: WorkspaceQuestion[]): {
@@ -3001,34 +3424,143 @@ function summarizeSubmittedAnswers(
     .join("\n");
 }
 
-function formatGoalResult(goal: {
+function formatGoalResult(goal: WorkspaceGoal): string {
+  const lines = [
+    `Goal: ${goal.objective}`,
+    goal.scopeIn.length || goal.scopeOut.length
+      ? `Scope: In(${goal.scopeIn.join("; ") || "none"}) / Out(${goal.scopeOut.join("; ") || "none"})`
+      : undefined,
+    goal.successCriteria.length ? `Success criteria: ${goal.successCriteria.join("; ")}` : undefined,
+    goal.verification.length ? `Verification: ${goal.verification.join("; ")}` : undefined,
+    goal.stopConditions.length ? `Stop conditions: ${goal.stopConditions.join("; ")}` : undefined,
+    goal.currentSummary ? `Current summary: ${goal.currentSummary}` : undefined,
+    `Status: ${goal.status} (revision ${goal.revision})`,
+    `Provider-reported tokens: ${goal.metrics.tokenUsage.totalTokens} across ${goal.metrics.tokenUsage.reportCount} reports`,
+    `Exact work timer: ${goal.metrics.workDuration.totalMilliseconds} ms${goal.metrics.workDuration.running ? " (running)" : ""}`,
+    goal.metrics.progress.source === "linked_plan_steps"
+      ? `Plan progress: ${goal.metrics.progress.displayPercent} (${goal.metrics.progress.exactFraction}; exact % = ${goal.metrics.progress.percentageNumerator}/${goal.metrics.progress.percentageDenominator})`
+      : "Plan progress: unavailable until a current Plan is explicitly linked to this Goal",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function toStructuredGoal(goal: WorkspaceGoal): {
+  id: string;
+  projectWorkflowKey: string;
   objective: string;
-  status: "active" | "complete" | "blocked";
-  tokenBudget?: number;
+  scope: { in: string[]; out: string[] };
+  successCriteria: string[];
+  verification: string[];
+  stopConditions: string[];
+  currentSummary?: string;
+  status: WorkspaceGoal["status"];
+  revision: number;
+  metrics: WorkspaceGoal["metrics"];
   createdAt: string;
   updatedAt: string;
-  timeUsedSeconds: number;
-  completedAt?: string;
-  blockedAt?: string;
-}, includeCompletionNote = false): string {
-  const parsed = parseGoalDefinition(goal.objective);
-  const lines = [
-    `Goal: ${parsed.definition.objective}`,
-    parsed.definition.scope
-      ? `Scope: In(${parsed.definition.scope.in.join("; ") || "none"}) / Out(${parsed.definition.scope.out.join("; ") || "none"})`
-      : undefined,
-    parsed.definition.verification?.length
-      ? `Verification: ${parsed.definition.verification.join("; ")}`
-      : undefined,
-    `Status: ${goal.status}`,
-    goal.tokenBudget !== undefined ? `Token budget: ${goal.tokenBudget}` : undefined,
-    `Time used seconds: ${goal.timeUsedSeconds}`,
-    goal.completedAt ? `Completed: ${goal.completedAt}` : undefined,
-    goal.blockedAt ? `Blocked: ${goal.blockedAt}` : undefined,
-    includeCompletionNote ? "Report the final budget and usage summary back to the user if the host tracks it." : undefined,
-  ];
+  archivedAt?: string;
+} {
+  return {
+    id: goal.id,
+    projectWorkflowKey: goal.projectWorkflowKey,
+    objective: goal.objective,
+    scope: { in: goal.scopeIn, out: goal.scopeOut },
+    successCriteria: goal.successCriteria,
+    verification: goal.verification,
+    stopConditions: goal.stopConditions,
+    currentSummary: goal.currentSummary,
+    status: goal.status,
+    revision: goal.revision,
+    metrics: goal.metrics,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+    archivedAt: goal.archivedAt,
+  };
+}
 
-  return lines.filter(Boolean).join("\n");
+function formatWorkflowDigest(digest: WorkflowDigest): string {
+  const goal = digest.goalStatus
+    ? `Goal ${digest.goalStatus}${digest.goalTitle ? `: ${digest.goalTitle}` : ""}`
+    : "No current Goal";
+  const plan = digest.planStatus
+    ? `Plan ${digest.planStatus} r${digest.planRevision ?? 0}${digest.steps ? ` (${digest.steps.completed}/${digest.steps.total} complete)` : ""}`
+    : "No current Plan";
+  return `${goal}; ${plan}.`;
+}
+
+function formatWorkflowHistory(events: Array<{
+  createdAt: string;
+  eventType: string;
+  summary: string;
+}>): string {
+  if (events.length === 0) return "No workflow history for this project.";
+  return events.map((event) => `${event.createdAt} ${event.eventType}: ${event.summary}`).join("\n");
+}
+
+function summarizeSkills(skills: Array<{ source: SkillSource }>): {
+  total: number;
+  bySource: Record<SkillSource, number>;
+} {
+  const bySource: Record<SkillSource, number> = {
+    devspace_system: 0,
+    local: 0,
+    legacy_core: 0,
+    installed: 0,
+    official_vendored: 0,
+    global: 0,
+  };
+  for (const skill of skills) bySource[skill.source]++;
+  return { total: skills.length, bySource };
+}
+
+function searchWorkspaceSkills(
+  skills: DevSpaceSkill[],
+  input: {
+    query?: string;
+    source?: SkillSource;
+    limit?: number;
+    cursor?: string;
+  },
+): {
+  skills: Array<{
+    qualifiedId: string;
+    name: string;
+    description: string;
+    source: SkillSource;
+    locator: string;
+  }>;
+  nextCursor?: string;
+} {
+  const query = input.query?.trim().toLocaleLowerCase();
+  const matching = skills
+    .filter((skill) => !input.source || skill.source === input.source)
+    .filter((skill) => {
+      if (!query) return true;
+      return [skill.qualifiedId, skill.name, skill.description]
+        .join("\n")
+        .toLocaleLowerCase()
+        .includes(query);
+    })
+    .sort((left, right) => left.qualifiedId.localeCompare(right.qualifiedId));
+
+  const start = input.cursor === undefined ? 0 : Number.parseInt(input.cursor, 10);
+  if (!Number.isSafeInteger(start) || start < 0 || start > matching.length) {
+    throw new Error("Invalid skills search cursor.");
+  }
+  const limit = Math.max(1, Math.min(input.limit ?? 20, 50));
+  const page = matching.slice(start, start + limit);
+  const nextOffset = start + page.length;
+
+  return {
+    skills: page.map((skill) => ({
+      qualifiedId: skill.qualifiedId,
+      name: skill.name,
+      description: skill.description,
+      source: skill.source,
+      locator: skill.locator,
+    })),
+    nextCursor: nextOffset < matching.length ? String(nextOffset) : undefined,
+  };
 }
 
 function formatUserInputRecordResult(record: WorkspaceUserInputRecord): string {

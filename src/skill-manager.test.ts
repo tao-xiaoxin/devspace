@@ -21,7 +21,7 @@ try {
   const agentDir = join(root, "agent");
   const localSkill = join(root, "local-installed-skill");
   const remoteRepo = join(root, "remote-skill-repo");
-  const conflictingLocal = join(root, "create-plan");
+  const conflictingLocal = join(root, "devspace-plan");
   const invalidDirSkill = join(root, "mismatched-dir");
   const symlinkSkill = join(root, "symlink-skill");
   const pluginLikeRoot = join(root, "plugin-like-root");
@@ -68,7 +68,7 @@ try {
     join(conflictingLocal, "SKILL.md"),
     [
       "---",
-      "name: create-plan",
+      "name: devspace-plan",
       "description: Should conflict with system skill.",
       "---",
       "",
@@ -191,7 +191,7 @@ try {
         source: { kind: "local", path: conflictingLocal },
         localPathResolver: (path) => path,
       }),
-    /系统内置/,
+    /DevSpace 核心/,
   );
 
   await assert.rejects(

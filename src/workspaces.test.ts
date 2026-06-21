@@ -121,7 +121,11 @@ try {
   });
   const savedPlan = firstStore.savePlan({
     workspaceSessionId: persistentWorkspace.workspace.id,
-    explanation: "Track work in small steps",
+    expectedRevision: 0,
+    title: "Workflow state migration",
+    summary: "Track work in small steps",
+    scopeIn: ["project workflow state"],
+    validation: ["npm test"],
     steps: [
       { step: "Inspect repo", status: "completed" },
       { step: "Implement plan tools", status: "in_progress" },
@@ -152,10 +156,22 @@ try {
   assert.equal(savedPrompt.status, "pending");
   const savedGoal = firstStore.saveGoal({
     workspaceSessionId: persistentWorkspace.workspace.id,
-    objective: "Ship Codex-style planning support",
-    tokenBudget: 1200,
+    objective: "Ship project-scoped workflow support",
+    successCriteria: ["A new session resumes the current Plan and Goal"],
+    verification: ["npm test"],
+    currentSummary: "Current: migrate workflow state.",
   });
   assert.equal(savedGoal.status, "active");
+  const sameProjectSession = await persistentRegistry.openWorkspace(root);
+  assert.notEqual(sameProjectSession.workspace.id, persistentWorkspace.workspace.id);
+  assert.equal(
+    firstStore.getPlan(sameProjectSession.workspace.id)?.projectWorkflowKey,
+    savedPlan.projectWorkflowKey,
+  );
+  assert.equal(firstStore.getGoal(sameProjectSession.workspace.id)?.objective, savedGoal.objective);
+  assert.equal(firstStore.getCollaborationMode(sameProjectSession.workspace.id).mode, "plan");
+  assert.equal(firstStore.getWorkflowDigest(sameProjectSession.workspace.id).hasActivePlan, true);
+  assert.equal(firstStore.getWorkflowDigest(persistentWorktree.workspace.id).hasActivePlan, false);
   const blockedGoal = firstStore.updateGoalStatus({
     workspaceSessionId: persistentWorkspace.workspace.id,
     status: "blocked",
@@ -174,8 +190,10 @@ try {
   assert.equal(restoredWorkspace.root, root);
   assert.equal(restoredWorkspace.mode, "checkout");
   const restoredPlan = secondStore.getPlan(persistentWorkspace.workspace.id);
-  assert.equal(restoredPlan?.explanation, "Track work in small steps");
+  assert.equal(restoredPlan?.title, "Workflow state migration");
+  assert.equal(restoredPlan?.summary, "Track work in small steps");
   assert.equal(restoredPlan?.steps[1]?.status, "in_progress");
+  assert.equal(restoredPlan?.revision, 1);
   const restoredMode = secondStore.getCollaborationMode(persistentWorkspace.workspace.id);
   assert.equal(restoredMode.mode, "plan");
   const restoredPrompt = secondStore.getPendingUserInput(persistentWorkspace.workspace.id);
@@ -184,8 +202,9 @@ try {
   const restoredGoal = secondStore.getGoal(persistentWorkspace.workspace.id);
   assert.equal(restoredGoal?.objective, "Retry Codex-style planning support");
   assert.equal(restoredGoal?.status, "active");
-  assert.equal(restoredGoal?.tokenBudget, undefined);
-  assert.equal(typeof restoredGoal?.timeUsedSeconds, "number");
+  assert.equal(restoredGoal?.revision, 1);
+  assert.equal("tokenBudget" in (restoredGoal ?? {}), false);
+  assert.equal("timeUsedSeconds" in (restoredGoal ?? {}), false);
   assert.throws(
     () =>
       secondStore.saveGoal({
@@ -198,7 +217,7 @@ try {
     workspaceSessionId: persistentWorkspace.workspace.id,
     status: "complete",
   });
-  assert.equal(completedGoal.status, "complete");
+  assert.equal(completedGoal.status, "completed");
 
   const restoredWorktree = restoredRegistry.getWorkspace(persistentWorktree.workspace.id);
   assert.equal(restoredWorktree.mode, "worktree");

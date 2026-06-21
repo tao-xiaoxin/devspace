@@ -1,44 +1,48 @@
 ---
 name: senior-architect-lite
-description: Evaluate architecture options, tradeoffs, and implementation direction for coding tasks inside DevSpace.
+description: Legacy compatibility architecture-review workflow. Use senior-architect for the active DevSpace core Skill.
 license: MIT
 metadata:
-  version: 1.0.0
+  version: 2.0.0
   author: DevSpace
-  category: engineering
-  updated: 2026-06-20
+  category: legacy-engineering
+  updated: 2026-06-21
 ---
 
-# Senior Architect Lite
+# Legacy Architecture Review Compatibility
 
-## What This Skill Does
+This Skill remains for compatibility with older prompts. The active core Skill is `senior-architect`.
 
-Use this skill when the task needs architecture guidance, solution framing, design tradeoff analysis, or implementation direction before code changes.
+## Evidence First
 
-## Before Starting
+Before recommending an architectural change, inspect the project instructions, public interfaces, schema and persistence model, tests, deployment configuration, and current failure paths. Separate observed facts from assumptions.
 
-1. Read the relevant code, types, configs, and entrypoints first.
-2. Ground recommendations in the current repository, not generic best practices.
-3. Keep conclusions concise and decision-oriented.
+## Required Review Dimensions
 
-## Workflow
+Evaluate each relevant dimension explicitly:
 
-1. Identify the current architecture and constraints.
-2. Compare only the viable options.
-3. Recommend one approach with clear reasoning.
-4. Surface the main risks, compatibility concerns, and validation needs.
-5. If the task is still ambiguous, use `request_user_input` for the missing product or tradeoff decision.
+- ownership and lifecycle of state;
+- API and storage compatibility;
+- concurrency, retries, and data-loss failure modes;
+- authorization, filesystem, shell, and network boundaries;
+- migration and rollback;
+- observability and operator recovery;
+- tests that prove the proposed behavior.
 
-## Deliverable
+Do not propose a subsystem because it sounds broadly useful. Tie every recommendation to concrete files, interfaces, user flows, and operational cost.
+
+## Workflow State
+
+When reviewing Plan or Goal work, remember that DevSpace state is scoped to a canonical project root. It is shared across new sessions for the same root but isolated from other projects and Git worktrees. Plans and Goals use revisions to prevent silent concurrent overwrite.
+
+## Output
 
 Return:
 
-- recommended approach
-- why it fits this codebase
-- key implementation implications
-- tests or checks needed to validate it
+1. constraints and evidence;
+2. a recommended implementation boundary;
+3. alternatives rejected and why;
+4. migration, rollback, and security effects;
+5. validation steps.
 
-## References
-
-- [Decision Guide](references/decision-guide.md)
-- [Response Style](references/style.md)
+Use `devspace-plan` when the user wants a persisted implementation Plan.

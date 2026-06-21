@@ -1,53 +1,45 @@
 ---
 name: define-goal
-description: Rewrite a vague request into a concrete, verifiable goal with scope and acceptance criteria. Use when the user asks for /goal or needs a measurable target before execution.
+description: Legacy compatibility guidance for older DevSpace goal-definition prompts. DevSpace now uses devspace-goal for the durable project-scoped /goal workflow.
 license: MIT
 metadata:
-  version: 1.0.0
+  version: 2.0.0
   author: DevSpace
-  category: workflow
+  category: legacy-workflow
   updated: 2026-06-21
 ---
 
-# Define Goal
+# Legacy Define Goal Compatibility
 
-## Purpose
+This Skill is retained for compatibility with earlier prompts that request `define-goal`. New DevSpace alias resolution maps `/goal` to `devspace-goal`.
 
-Use this skill to convert an ambiguous request into a specific goal that can be verified in the current workspace.
+## Required Goal Lifecycle
 
-## Workflow
+1. Inspect the current project `workflowDigest` and call `get_goal` before creating or changing a Goal.
+2. Create a Goal only when the user explicitly needs a persistent, cross-session outcome. Routine coding requests do not need one.
+3. When no active Goal exists, use `create_goal` with an objective, scope, acceptance criteria, verification, stop conditions, and concise current summary.
+4. When a Goal already exists and matches the request, preserve it and update only the parts that changed.
+5. When a Goal conflicts with the new request, ask the user whether to archive it, mark it completed, mark it blocked, or keep it unchanged. Never silently replace an active Goal.
+6. Use `update_goal(expectedRevision=...)` for every change to an existing Goal. Reload with `get_goal` after a revision conflict.
 
-1. Identify what should be true when the work is done.
-2. Limit the scope to the systems, modules, or behaviors that actually matter.
-3. Define how success will be verified with concrete evidence, thresholds, or commands when possible.
-4. State what is explicitly out of scope.
-5. If a critical scope or verification detail is missing, ask one short question. Otherwise, make a reasonable assumption and continue.
+## Goal Standard
 
-## Output Requirements
+A durable Goal must be verifiable rather than aspirational:
 
-- Keep the goal measurable and bounded.
-- Prefer real verification evidence over vague quality language.
-- Do not invent long-running lifecycle mechanics, dashboards, or progress logs.
-- Do not simulate native Codex goal commands.
+- `objective`: one user-visible outcome.
+- `scope.in` / `scope.out`: what is included and excluded.
+- `successCriteria`: conditions that prove success.
+- `verification`: tests, review checks, or manual validation.
+- `stopConditions`: reasons to pause, escalate, or abandon the approach.
+- `currentSummary`: compact completed/current/blocked state for the next session.
 
-## Recommended Shape
+Use statuses deliberately:
 
-```markdown
-# Goal
+- `active`: work can continue.
+- `blocked`: a specific decision, dependency, or permission is missing.
+- `completed`: success criteria were satisfied and verified.
+- `archived`: no longer current, while history remains available.
 
-## Objective
-...
+Do not invent token counts, clock time, activity seconds, or percentage progress. Store evidence and blockers instead.
 
-## Scope
-- In:
-- Out:
-
-## Success criteria
-- ...
-
-## Verification
-- ...
-
-## Stop / escalation conditions
-- ...
-```
+For the active DevSpace contract, resolve `devspace-goal` and read its references.

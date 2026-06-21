@@ -1,14 +1,21 @@
-# Decision Guide
+# Architecture Decision Guide
 
-When comparing options, prefer:
+Use an architecture recommendation only after documenting the relevant constraints.
 
-- the smallest change that still fully satisfies the requirement
-- compatibility with existing project patterns
-- explicit interfaces and testability
-- approaches that reduce follow-up ambiguity for the implementer
+## Minimum evidence
 
-Always name:
+- current public API or command contract;
+- data schema and migration path;
+- relevant tests and failure behavior;
+- deployment and operator boundary;
+- compatibility expectations for existing clients and stored data.
 
-- the recommended option
-- the main rejected option
-- the key risk or migration concern
+## Decision questions
+
+1. What concrete user or operator failure does the change solve?
+2. Which module owns the new state or policy?
+3. What happens during partial failure, restart, retry, or concurrent access?
+4. Which existing callers could break?
+5. How can the change be verified and rolled back?
+
+Prefer a narrow adapter or migration over a new framework when the existing architecture already has a suitable boundary.

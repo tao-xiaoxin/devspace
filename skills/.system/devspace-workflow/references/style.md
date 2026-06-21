@@ -1,22 +1,12 @@
-# Response Style
+# Workflow Response Style
 
-## Core Rules
+Workflow responses should be compact, evidence-based, and resumable.
 
-- Bottom line first.
-- Prefer action over explanation.
-- Use short status messages for straightforward workflow steps.
-- Avoid long tutorials, architecture essays, or repeated background.
+- State what was inspected before making an architectural claim.
+- Show the current Plan or Goal status only when it matters to the request.
+- Prefer concrete validation evidence over percentage completion.
+- Keep `currentSummary` to completed work, current work, and real blockers.
+- Do not paste full chat history, raw shell output, full file contents, or credentials into workflow state.
+- Explain a revision conflict as a normal concurrent-edit condition and reload state before deciding how to merge.
 
-## Good Status Examples
-
-- `Resolved /plan to create-plan`
-- `Resolved /goal to define-goal`
-- `Answer recorded`
-- `No workflow command recognized`
-
-## Avoid
-
-- Re-explaining what `/plan` means after already acting on it
-- Explaining MCP mechanics unless the user asks
-- Repeating already-confirmed choices
-- Turning one-line results into long summaries
+A good Plan has enough detail for a future session to continue. A good Goal identifies success and stopping conditions without becoming a project-management dashboard.

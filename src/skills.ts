@@ -1,6 +1,7 @@
+import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   loadSkills,
@@ -11,11 +12,19 @@ import {
 import type { ServerConfig } from "./config.js";
 import { expandHomePath, isPathInsideRoot } from "./roots.js";
 
-export type SkillSource = "system" | "local" | "installed" | "global";
+export type SkillSource =
+  | "devspace_system"
+  | "local"
+  | "legacy_core"
+  | "installed"
+  | "official_vendored"
+  | "global";
 export type SkillResolveMode = "read_only" | "normal";
 
 export interface DevSpaceSkill extends Skill {
   source: SkillSource;
+  qualifiedId: string;
+  locator: string;
   aliases?: string[];
   resolveMode: SkillResolveMode;
   legacyCore?: boolean;
@@ -34,6 +43,7 @@ export interface SkillReadResolution {
 
 export interface ResolvedSkillDefinition {
   name: string;
+  qualifiedId: string;
   source: SkillSource;
   path: string;
   alias?: string;
@@ -47,6 +57,11 @@ interface SkillBatch {
   diagnostics: LoadSkillsResult["diagnostics"];
 }
 
+interface SkillSourceOptions {
+  legacyCore?: boolean;
+  qualifiedPrefix?: string;
+}
+
 const PLAN_ALIAS = "/plan";
 const GOAL_ALIAS = "/goal";
 
@@ -54,10 +69,11 @@ export function loadWorkspaceSkills(config: ServerConfig, cwd: string): LoadedSk
   if (!config.skillsEnabled) return { skills: [], diagnostics: [] };
 
   const batches: SkillBatch[] = [
-    loadSkillsFromSourceDir(bundledSystemSkillPath(), "system"),
-    loadSkillsFromSourceDir(legacyWorkspaceCorePath(cwd), "system", { legacyCore: true }),
+    ...loadDevSpaceSystemSkillBatches(),
     loadSkillsFromSourceDir(workspaceLocalSkillPath(cwd), "local"),
+    loadSkillsFromSourceDir(legacyWorkspaceCorePath(cwd), "legacy_core", { legacyCore: true }),
     loadSkillsFromSourceDir(workspaceInstalledSkillPath(cwd), "installed"),
+    ...loadOfficialVendoredSkillBatches(),
     loadSkillsFromSourceDir(globalSkillPath(config.agentDir), "global"),
     loadExplicitSkillPaths(config, cwd),
   ];
@@ -71,16 +87,16 @@ export async function resolveSkillDefinition(
 ): Promise<ResolvedSkillDefinition> {
   const lookup = normalizeSkillLookup(nameOrAlias);
   const alias = lookup === PLAN_ALIAS || lookup === GOAL_ALIAS ? lookup : undefined;
-  const skillName = alias === PLAN_ALIAS
-    ? "create-plan"
+  const fixedName = alias === PLAN_ALIAS
+    ? "devspace-plan"
     : alias === GOAL_ALIAS
-      ? "define-goal"
+      ? "devspace-goal"
       : lookup;
 
-  const skill = skills.find((candidate) => {
-    if (candidate.name === skillName) return true;
-    return candidate.aliases?.includes(lookup) ?? false;
-  });
+  const skill = alias
+    ? skills.find((candidate) => candidate.name === fixedName && candidate.source === "devspace_system")
+    : skills.find((candidate) => candidate.qualifiedId === fixedName)
+      ?? skills.find((candidate) => candidate.name === fixedName);
 
   if (!skill) {
     throw new Error(`Skill not found: ${nameOrAlias}`);
@@ -88,8 +104,9 @@ export async function resolveSkillDefinition(
 
   return {
     name: skill.name,
+    qualifiedId: skill.qualifiedId,
     source: skill.source,
-    path: resolve(skill.filePath),
+    path: skill.locator,
     alias,
     mode: skill.resolveMode,
     instructions: await readFile(skill.filePath, "utf8"),
@@ -102,6 +119,9 @@ export function resolveSkillReadPath(
   activatedSkillDirs: Set<string>,
   inputPath: string,
 ): SkillReadResolution | undefined {
+  const locatorMatch = resolveLocatorReadPath(skills, activatedSkillDirs, inputPath);
+  if (locatorMatch) return locatorMatch;
+
   const absolutePath = resolve(expandHomePath(inputPath));
 
   for (const skill of skills) {
@@ -143,19 +163,54 @@ export function formatPathForPrompt(path: string): string {
 
 export function skillSourceLabel(source: SkillSource): string {
   switch (source) {
-    case "system":
-      return "系统内置";
+    case "devspace_system":
+      return "DevSpace 核心";
     case "local":
       return "项目自定义";
+    case "legacy_core":
+      return "项目 legacy core";
     case "installed":
       return "项目已安装";
+    case "official_vendored":
+      return "OpenAI 官方副本";
     case "global":
       return "全局已安装";
   }
 }
 
+function loadDevSpaceSystemSkillBatches(): SkillBatch[] {
+  const root = bundledSystemSkillPath();
+  if (!existsSync(root)) return [];
+
+  const coreDirectories = new Set([
+    "devspace-plan",
+    "devspace-goal",
+    "devspace-workflow",
+    "senior-architect",
+    "skill-authoring",
+  ]);
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && coreDirectories.has(entry.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => loadSkillsFromSourceDir(resolve(root, entry.name), "devspace_system"));
+}
+
+function loadOfficialVendoredSkillBatches(): SkillBatch[] {
+  const root = officialVendoredSkillsPath();
+  const channels = [".system", ".curated", ".experimental"];
+  return channels.map((channel) =>
+    loadSkillsFromSourceDir(resolve(root, channel), "official_vendored", {
+      qualifiedPrefix: `openai:${channel}`,
+    }),
+  );
+}
+
 function bundledSystemSkillPath(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "skills", ".system");
+}
+
+function officialVendoredSkillsPath(): string {
+  return resolve(bundledSystemSkillPath(), "openai", "skills");
 }
 
 function legacyWorkspaceCorePath(cwd: string): string {
@@ -177,25 +232,27 @@ function globalSkillPath(agentDir: string): string {
 function loadSkillsFromSourceDir(
   dir: string,
   source: SkillSource,
-  options: { legacyCore?: boolean } = {},
+  options: SkillSourceOptions = {},
 ): SkillBatch {
+  if (!existsSync(dir)) return { skills: [], diagnostics: [] };
+
   const loaded = loadSkillsFromDir({
     dir,
-    source: source === "global" ? "user" : source,
+    source: source === "global" ? "user" : "system",
   });
 
   const diagnostics = [...loaded.diagnostics];
   if (options.legacyCore && loaded.skills.length > 0) {
     diagnostics.push({
       type: "warning",
-      message: `skills/core is deprecated; migrate these skills to skills/.system.`,
+      message: "skills/core is deprecated; migrate these skills to skills/local or skills/installed.",
       path: dir,
     });
   }
 
   return {
     diagnostics,
-    skills: loaded.skills.map((skill) => decorateSkill(skill, source, options)),
+    skills: loaded.skills.map((skill) => decorateSkill(skill, source, dir, options)),
   };
 }
 
@@ -213,32 +270,42 @@ function loadExplicitSkillPaths(config: ServerConfig, cwd: string): SkillBatch {
 
   return {
     diagnostics: loaded.diagnostics,
-    skills: loaded.skills.map((skill) => decorateSkill(skill, "global")),
+    skills: loaded.skills.map((skill) => decorateSkill(skill, "global", dirname(skill.filePath))),
   };
 }
 
 function decorateSkill(
   skill: Skill,
   source: SkillSource,
-  options: { legacyCore?: boolean } = {},
+  sourceRoot: string,
+  options: SkillSourceOptions = {},
 ): DevSpaceSkill {
+  const relativePath = relative(sourceRoot, skill.baseDir).split(sep).join("/");
+  const qualifiedId = options.qualifiedPrefix
+    ? `${options.qualifiedPrefix}/${relativePath || skill.name}`
+    : skill.name;
+  const locator = skillLocator(source, qualifiedId);
+
   return {
     ...skill,
     source,
-    aliases: aliasesForSkill(skill.name),
+    qualifiedId,
+    locator,
+    aliases: aliasesForSkill(skill.name, source),
     resolveMode: resolveModeForSkill(skill.name),
     legacyCore: options.legacyCore,
   };
 }
 
-function aliasesForSkill(name: string): string[] | undefined {
-  if (name === "create-plan") return [PLAN_ALIAS];
-  if (name === "define-goal") return [GOAL_ALIAS];
+function aliasesForSkill(name: string, source: SkillSource): string[] | undefined {
+  if (source !== "devspace_system") return undefined;
+  if (name === "devspace-plan") return [PLAN_ALIAS];
+  if (name === "devspace-goal") return [GOAL_ALIAS];
   return undefined;
 }
 
 function resolveModeForSkill(name: string): SkillResolveMode {
-  return name === "create-plan" ? "read_only" : "normal";
+  return name === "devspace-plan" ? "read_only" : "normal";
 }
 
 function mergeLoadedSkills(batches: SkillBatch[]): LoadedSkills {
@@ -248,9 +315,10 @@ function mergeLoadedSkills(batches: SkillBatch[]): LoadedSkills {
   for (const batch of batches) {
     diagnostics.push(...batch.diagnostics);
     for (const skill of batch.skills) {
-      const existing = winners.get(skill.name);
+      const key = skill.source === "official_vendored" ? skill.qualifiedId : skill.name;
+      const existing = winners.get(key);
       if (!existing) {
-        winners.set(skill.name, skill);
+        winners.set(key, skill);
         continue;
       }
 
@@ -274,11 +342,47 @@ function mergeLoadedSkills(batches: SkillBatch[]): LoadedSkills {
   };
 }
 
+function resolveLocatorReadPath(
+  skills: DevSpaceSkill[],
+  activatedSkillDirs: Set<string>,
+  inputPath: string,
+): SkillReadResolution | undefined {
+  if (!inputPath.startsWith("skill://")) return undefined;
+
+  for (const skill of skills) {
+    if (inputPath === skill.locator) {
+      return { absolutePath: resolve(skill.filePath), skill, isSkillFile: true };
+    }
+
+    const prefix = `${skill.locator.slice(0, -"SKILL.md".length)}`;
+    if (!inputPath.startsWith(prefix)) continue;
+    if (!activatedSkillDirs.has(resolve(skill.baseDir))) continue;
+
+    const relativePath = inputPath.slice(prefix.length);
+    if (!relativePath || relativePath === "SKILL.md") {
+      return { absolutePath: resolve(skill.filePath), skill, isSkillFile: true };
+    }
+    const absolutePath = resolve(skill.baseDir, relativePath);
+    if (!isPathInsideRoot(absolutePath, resolve(skill.baseDir))) return undefined;
+    return { absolutePath, skill, isSkillFile: false };
+  }
+
+  return undefined;
+}
+
+function skillLocator(source: SkillSource, qualifiedId: string): string {
+  const namespace = source === "devspace_system"
+    ? "devspace-system"
+    : source === "official_vendored"
+      ? "official-vendored"
+      : source;
+  return `skill://${namespace}/${qualifiedId}/SKILL.md`;
+}
+
 function normalizeSkillLookup(nameOrAlias: string): string {
   const trimmed = nameOrAlias.trim().replace(/^@\S+\s+/, "");
   if (trimmed.startsWith("/")) {
     return trimmed.split(/\s+/)[0] ?? trimmed;
   }
-
   return trimmed;
 }

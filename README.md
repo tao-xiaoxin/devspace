@@ -179,18 +179,18 @@ DevSpace gives ChatGPT tools to:
 - discover local agent skills from your skill folders
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
 
-DevSpace also bundles a small set of built-in workflow and engineering skills.
-Their structure is inspired by [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills), which is released under the MIT license.
+DevSpace bundles durable workflow Skills rather than short prompt examples. Core Skills cover project Plan recovery, Goal definition and status, workflow resumption, architecture review, and Skill authoring.
 
-Project skill directories are split by purpose:
+Project Skill directories are split by purpose:
 
-- system built-in DevSpace skills, committed with DevSpace
-- `skills/local`: project-defined skills you want to keep in version control
-- `skills/installed`: user-installed project skills, ignored by git by default
+- `skills/.system`: DevSpace core workflow Skills committed with DevSpace
+- `skills/.system/openai/skills` (when vendored): reviewed OpenAI Skills, synchronized manually and never updated at runtime
+- `skills/local`: project-defined Skills you want to keep in version control
+- `skills/installed`: user-installed project Skills, ignored by git by default
 
-ChatGPT Plus on the web cannot natively install or register Codex Skills. DevSpace provides the MCP-side skill installation, discovery, and resolution layer instead.
+ChatGPT Plus on the web cannot natively install or register Codex Skills. DevSpace provides MCP-side discovery, resolution, and controlled `skill://` resource access instead.
 
-`@devspace /plan` and `@devspace /goal` are alias-style workflow conventions. They are not native ChatGPT slash commands.
+`@devspace /plan` and `@devspace /goal` are stable alias-style workflow conventions. `/plan` always resolves to `devspace-plan`; `/goal` always resolves to `devspace-goal`; local or vendored Skills cannot silently override them. See [vendored OpenAI Skills](docs/openai-skills-vendor.md) for the manual review and synchronization policy.
 
 Manage installed skills with:
 
@@ -208,6 +208,14 @@ devspace skills remove -g research
 ```
 
 `--repo/--path` and `--local-path` must point directly at one standard skill directory that contains `SKILL.md`. Repository roots, plugin roots, command folders, and agent-rules directories are rejected.
+
+## Project Workflow Store
+
+DevSpace stores compact project-scoped workflow state: the current Plan, Goal, Plan Mode, structured step state, and at most 100 concise workflow events. It does not store chat transcripts, raw tool output, shell logs, or file snapshots. Goal metrics are limited to exact provider-reported token records, an explicit server work timer, and progress derived from a Plan explicitly linked to that Goal.
+
+The same canonical project directory shares Plan and Goal state across ChatGPT sessions and DevSpace restarts. Different projects and different Git worktree roots remain isolated. `open_workspace` returns a small `workflowDigest`; call `get_plan`, `get_goal`, and paginated `get_workflow_history` only when full state is needed.
+
+Plan and Goal writes use optimistic concurrency. Read the current state first, then send `expectedRevision`; stale sessions receive a revision conflict instead of silently overwriting newer work.
 
 ## Mental Model
 

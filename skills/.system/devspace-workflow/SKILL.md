@@ -1,75 +1,45 @@
 ---
 name: devspace-workflow
-description: Run concise DevSpace planning, goal, and answer workflows with minimal narration.
+description: Recover and coordinate project-scoped DevSpace workflow state across sessions, including Plan, Goal, mode, and concise history.
 license: MIT
 metadata:
-  version: 1.0.0
+  version: 2.0.0
   author: DevSpace
   category: workflow
-  updated: 2026-06-20
+  updated: 2026-06-21
 ---
 
-# DevSpace Workflow
+# DevSpace Workflow Recovery
 
-## What This Skill Does
+DevSpace stores a small project-scoped workflow state keyed by the workspace's canonical real path. This lets a new ChatGPT session continue the current project without loading chat transcripts, tool output, or all historical Plans.
 
-Use this skill when the user drives DevSpace with concise workflow messages such as `/plan`, `/goal`, skill names, or compact answers to pending questions.
+## Start or Resume
 
-## Before Starting
+After `open_workspace`, inspect `workflowDigest` first.
 
-1. Confirm you already have a `workspaceId` for the active project.
-2. If there is no open workspace, call `open_workspace` first.
-3. Reuse the same `workspaceId`; do not reopen the same folder unless it stops working or the user explicitly asks.
-4. Keep replies short and operational unless the user asks for explanation.
+- No active state: work normally. Create a Plan or Goal only when the user asks for durable workflow state.
+- Existing Goal or Plan: call `get_goal` or `get_plan` only when the current task needs its complete definition.
+- Relevant older decision: call `get_workflow_history` with a small page size. Do not load history by default.
+- A matching user request can resume the current workflow; an incompatible request requires the Goal conflict procedure.
 
-## Workflow Modes
+## Scope and Isolation
 
-### Plan Workflow
+- Same canonical project root: shared across DevSpace sessions and restarts.
+- Different project roots: isolated.
+- Different Git worktree roots: isolated by default.
+- `workspaceId` is a session handle, never the durable Plan or Goal identity.
 
-Trigger on messages like:
+## Mode
 
-- `@dev /plan ...`
-- `/plan ...`
+`plan` is a workflow preference, not a permission boundary.
 
-Use `resolve_skill("/plan")` first, then follow the returned `create-plan` instructions. Treat `/plan` as an alias, not a native slash command.
+- `plan`: read, inspect, ask material questions, write or update the Plan, then wait for implementation approval.
+- `default`: make approved changes, test, and maintain the Plan or Goal when relevant.
 
-### Goal Workflow
+Plan Mode never grants extra filesystem, shell, Git, or Skill permissions.
 
-Trigger on messages like:
+## History
 
-- `@dev /goal ...`
-- `/goal ...`
+Workflow history contains only compact events such as `plan.updated`, `goal.blocked`, and `mode.changed`. It must never contain full chats, raw tool output, secrets, or command logs.
 
-Use `resolve_skill("/goal")` first, then follow the returned `define-goal` instructions. If the user explicitly wants a lightweight persisted goal record, use `create_goal`, `get_goal`, and `update_goal` after the goal is well-defined.
-
-### Compact Answers
-
-Trigger when there is pending `request_user_input` state and the user replies with compact text such as `1B，2A`, `1B, 2A`, or `1b 2a`.
-
-Prefer passing the raw reply through `handle_workspace_command` only for compact answer parsing, or directly through `answer_user_input(text)`, instead of paraphrasing it.
-
-### Batch File Changes
-
-When the user asks for broad or multi-file modifications, prefer `apply_workspace_patch` with a unified diff patch instead of shell redirection, heredocs, generated scripts, or ad-hoc write commands.
-
-### Git Push
-
-When the user explicitly asks to push commits, prefer `git_push` with structured `remote`, `branch`, and `setUpstream` arguments instead of `bash` with a raw `git push` command.
-
-## Response Standard
-
-- Bottom line first.
-- Prefer action over explanation.
-- For simple workflow steps, return a short status.
-- Do not explain slash semantics or MCP mechanics unless the user asks.
-
-## References
-
-- [Command Mapping](references/commands.md)
-- [Response Style](references/style.md)
-- [Examples](references/examples.md)
-
-## Related Skills
-
-- `senior-architect-lite` for architecture decisions before or during `/plan`
-- `skill-authoring-lite` for creating or refactoring DevSpace skills with the same structure
+Read [references/workflow-recovery.md](references/workflow-recovery.md) for the resume sequence and [references/command-routing.md](references/command-routing.md) for alias behavior.

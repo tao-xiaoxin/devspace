@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const workspaceSessions = sqliteTable(
   "workspace_sessions",
@@ -79,6 +79,151 @@ export const workspaceModes = sqliteTable(
     mode: text("mode").notNull().default("default"),
     updatedAt: text("updated_at").notNull(),
   },
+);
+
+export const projectWorkflows = sqliteTable(
+  "project_workflows",
+  {
+    projectWorkflowKey: text("project_workflow_key").primaryKey(),
+    canonicalRoot: text("canonical_root").notNull(),
+    workspaceKind: text("workspace_kind").notNull(),
+    gitCommonDir: text("git_common_dir"),
+    gitRemoteOrigin: text("git_remote_origin"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [uniqueIndex("project_workflows_root_idx").on(table.canonicalRoot)],
+);
+
+export const workflowPlans = sqliteTable(
+  "workflow_plans",
+  {
+    id: text("id").primaryKey(),
+    projectWorkflowKey: text("project_workflow_key")
+      .notNull()
+      .references(() => projectWorkflows.projectWorkflowKey, { onDelete: "cascade" }),
+    goalId: text("goal_id"),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    scopeInJson: text("scope_in_json").notNull(),
+    scopeOutJson: text("scope_out_json").notNull(),
+    validationJson: text("validation_json").notNull(),
+    risksJson: text("risks_json").notNull(),
+    status: text("status").notNull(),
+    revision: integer("revision").notNull(),
+    isCurrent: integer("is_current").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    archivedAt: text("archived_at"),
+  },
+  (table) => [index("workflow_plans_history_idx").on(table.projectWorkflowKey, table.updatedAt)],
+);
+
+export const workflowPlanSteps = sqliteTable(
+  "workflow_plan_steps",
+  {
+    id: text("id").primaryKey(),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => workflowPlans.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    content: text("content").notNull(),
+    status: text("status").notNull(),
+    note: text("note"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("workflow_plan_steps_plan_idx").on(table.planId, table.position)],
+);
+
+export const workflowGoals = sqliteTable(
+  "workflow_goals",
+  {
+    id: text("id").primaryKey(),
+    projectWorkflowKey: text("project_workflow_key")
+      .notNull()
+      .references(() => projectWorkflows.projectWorkflowKey, { onDelete: "cascade" }),
+    objective: text("objective").notNull(),
+    scopeInJson: text("scope_in_json").notNull(),
+    scopeOutJson: text("scope_out_json").notNull(),
+    successCriteriaJson: text("success_criteria_json").notNull(),
+    verificationJson: text("verification_json").notNull(),
+    stopConditionsJson: text("stop_conditions_json").notNull(),
+    currentSummary: text("current_summary"),
+    status: text("status").notNull(),
+    revision: integer("revision").notNull(),
+    isCurrent: integer("is_current").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    archivedAt: text("archived_at"),
+  },
+  (table) => [index("workflow_goals_history_idx").on(table.projectWorkflowKey, table.updatedAt)],
+);
+
+export const workflowGoalMetrics = sqliteTable(
+  "workflow_goal_metrics",
+  {
+    goalId: text("goal_id")
+      .primaryKey()
+      .references(() => workflowGoals.id, { onDelete: "cascade" }),
+    activeWorkStartedAt: text("active_work_started_at"),
+    accumulatedWorkMs: integer("accumulated_work_ms").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+);
+
+export const workflowGoalTokenUsage = sqliteTable(
+  "workflow_goal_token_usage",
+  {
+    id: text("id").primaryKey(),
+    goalId: text("goal_id")
+      .notNull()
+      .references(() => workflowGoals.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    providerRequestId: text("provider_request_id").notNull(),
+    model: text("model"),
+    inputTokens: integer("input_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+    reasoningTokens: integer("reasoning_tokens").notNull(),
+    totalTokens: integer("total_tokens").notNull(),
+    providerReportedAt: text("provider_reported_at"),
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("workflow_goal_token_usage_dedupe_idx").on(
+      table.goalId,
+      table.provider,
+      table.providerRequestId,
+    ),
+    index("workflow_goal_token_usage_history_idx").on(table.goalId, table.recordedAt),
+  ],
+);
+
+export const workflowModes = sqliteTable(
+  "workflow_modes",
+  {
+    projectWorkflowKey: text("project_workflow_key")
+      .primaryKey()
+      .references(() => projectWorkflows.projectWorkflowKey, { onDelete: "cascade" }),
+    mode: text("mode").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+);
+
+export const workflowEvents = sqliteTable(
+  "workflow_events",
+  {
+    id: text("id").primaryKey(),
+    projectWorkflowKey: text("project_workflow_key")
+      .notNull()
+      .references(() => projectWorkflows.projectWorkflowKey, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    eventType: text("event_type").notNull(),
+    summary: text("summary").notNull(),
+    revision: integer("revision"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("workflow_events_history_idx").on(table.projectWorkflowKey, table.createdAt)],
 );
 
 export const workspaceUserInputs = sqliteTable(
@@ -166,3 +311,11 @@ export type WorkspaceModeRow = typeof workspaceModes.$inferSelect;
 export type NewWorkspaceModeRow = typeof workspaceModes.$inferInsert;
 export type WorkspaceUserInputRow = typeof workspaceUserInputs.$inferSelect;
 export type NewWorkspaceUserInputRow = typeof workspaceUserInputs.$inferInsert;
+export type ProjectWorkflowRow = typeof projectWorkflows.$inferSelect;
+export type WorkflowPlanRow = typeof workflowPlans.$inferSelect;
+export type WorkflowPlanStepRow = typeof workflowPlanSteps.$inferSelect;
+export type WorkflowGoalRow = typeof workflowGoals.$inferSelect;
+export type WorkflowGoalMetricsRow = typeof workflowGoalMetrics.$inferSelect;
+export type WorkflowGoalTokenUsageRow = typeof workflowGoalTokenUsage.$inferSelect;
+export type WorkflowModeRow = typeof workflowModes.$inferSelect;
+export type WorkflowEventRow = typeof workflowEvents.$inferSelect;

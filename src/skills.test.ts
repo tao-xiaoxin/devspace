@@ -4,8 +4,8 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { loadConfig } from "./config.js";
 import {
-  formatPathForPrompt,
   loadWorkspaceSkills,
+  markSkillActivated,
   resolveSkillDefinition,
   resolveSkillReadPath,
 } from "./skills.js";
@@ -16,115 +16,47 @@ try {
   const projectRoot = join(root, "project");
   const agentDir = join(root, "agent");
   const explicitSkills = join(root, "explicit-skills");
-  await mkdir(join(projectRoot, "skills", "local", "project-skill"), { recursive: true });
-  await mkdir(join(projectRoot, "skills", "installed", "installed-skill"), { recursive: true });
-  await mkdir(join(projectRoot, "skills", "core", "skill-authoring-lite"), { recursive: true });
-  await mkdir(join(projectRoot, "skills", "local", "duplicate-priority-skill"), { recursive: true });
-  await mkdir(join(projectRoot, "skills", "installed", "duplicate-priority-skill"), { recursive: true });
-  await mkdir(join(agentDir, "skills", "duplicate-priority-skill"), { recursive: true });
-  await mkdir(join(agentDir, "skills", "global-only-skill"), { recursive: true });
-  await mkdir(join(projectRoot, "skills", "local", "create-plan"), { recursive: true });
-  await mkdir(join(explicitSkills, "external-global-skill"), { recursive: true });
 
-  await writeFile(
-    join(projectRoot, "skills", "local", "project-skill", "SKILL.md"),
-    [
-      "---",
-      "name: project-skill",
-      "description: Project skill description.",
-      "---",
-      "",
-      "# Project Skill",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(projectRoot, "skills", "installed", "installed-skill", "SKILL.md"),
-    [
-      "---",
-      "name: installed-skill",
-      "description: Installed skill description.",
-      "---",
-      "",
-      "# Installed Skill",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(projectRoot, "skills", "core", "skill-authoring-lite", "SKILL.md"),
-    [
-      "---",
-      "name: skill-authoring-lite",
-      "description: Legacy core should lose to system.",
-      "---",
-      "",
-      "# Legacy Core Skill",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(projectRoot, "skills", "local", "duplicate-priority-skill", "SKILL.md"),
-    [
-      "---",
-      "name: duplicate-priority-skill",
-      "description: Local wins over installed and global.",
-      "---",
-      "",
-      "# Duplicate Local",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(projectRoot, "skills", "installed", "duplicate-priority-skill", "SKILL.md"),
-    [
-      "---",
-      "name: duplicate-priority-skill",
-      "description: Installed loses to local.",
-      "---",
-      "",
-      "# Duplicate Installed",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(agentDir, "skills", "duplicate-priority-skill", "SKILL.md"),
-    [
-      "---",
-      "name: duplicate-priority-skill",
-      "description: Global loses to local and installed.",
-      "---",
-      "",
-      "# Duplicate Global",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(agentDir, "skills", "global-only-skill", "SKILL.md"),
-    [
-      "---",
-      "name: global-only-skill",
-      "description: Global-only skill.",
-      "---",
-      "",
-      "# Global Only Skill",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(projectRoot, "skills", "local", "create-plan", "SKILL.md"),
-    [
-      "---",
-      "name: create-plan",
-      "description: Local create-plan should lose to system.",
-      "---",
-      "",
-      "# Local Create Plan",
-    ].join("\n"),
-  );
-  await writeFile(
-    join(explicitSkills, "external-global-skill", "SKILL.md"),
-    [
-      "---",
-      "name: external-global-skill",
-      "description: External skill paths map into global source semantics.",
-      "---",
-      "",
-      "# External Global Skill",
-    ].join("\n"),
-  );
+  await writeSkill(join(projectRoot, "skills", "local", "project-skill"), {
+    name: "project-skill",
+    description: "Project-local Skill.",
+    body: "# Project Skill",
+  });
+  await writeSkill(join(projectRoot, "skills", "installed", "installed-skill"), {
+    name: "installed-skill",
+    description: "Installed Skill.",
+    body: "# Installed Skill",
+  });
+  await writeSkill(join(projectRoot, "skills", "core", "duplicate-priority-skill"), {
+    name: "duplicate-priority-skill",
+    description: "Legacy core loses to local.",
+    body: "# Legacy Duplicate",
+  });
+  await writeSkill(join(projectRoot, "skills", "local", "duplicate-priority-skill"), {
+    name: "duplicate-priority-skill",
+    description: "Local wins over legacy, installed, and global.",
+    body: "# Local Duplicate",
+  });
+  await writeSkill(join(projectRoot, "skills", "installed", "duplicate-priority-skill"), {
+    name: "duplicate-priority-skill",
+    description: "Installed loses to local.",
+    body: "# Installed Duplicate",
+  });
+  await writeSkill(join(projectRoot, "skills", "local", "devspace-plan"), {
+    name: "devspace-plan",
+    description: "Attempted local override that must lose.",
+    body: "# Local Plan Override",
+  });
+  await writeSkill(join(agentDir, "skills", "global-only-skill"), {
+    name: "global-only-skill",
+    description: "Global Skill.",
+    body: "# Global Skill",
+  });
+  await writeSkill(join(explicitSkills, "external-global-skill"), {
+    name: "external-global-skill",
+    description: "Explicit global Skill path.",
+    body: "# Explicit Global Skill",
+  });
 
   const disabledConfig = loadConfig({
     DEVSPACE_ALLOWED_ROOTS: projectRoot,
@@ -148,54 +80,78 @@ try {
   assert.equal(loaded.skills.some((skill) => skill.name === "project-skill" && skill.source === "local"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "installed-skill" && skill.source === "installed"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "global-only-skill" && skill.source === "global"), true);
-  assert.equal(loaded.skills.some((skill) => skill.name === "create-plan" && skill.source === "system"), true);
-  assert.equal(loaded.skills.some((skill) => skill.name === "define-goal" && skill.source === "system"), true);
-  assert.equal(loaded.skills.some((skill) => skill.name === "skill-authoring-lite" && skill.source === "system"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "external-global-skill" && skill.source === "global"), true);
+  assert.equal(loaded.skills.some((skill) => skill.name === "devspace-plan" && skill.source === "devspace_system"), true);
+  assert.equal(loaded.skills.some((skill) => skill.name === "devspace-goal" && skill.source === "devspace_system"), true);
+  assert.equal(loaded.skills.some((skill) => skill.name === "devspace-workflow" && skill.source === "devspace_system"), true);
+  assert.equal(loaded.skills.some((skill) => skill.name === "senior-architect" && skill.source === "devspace_system"), true);
+  assert.equal(loaded.skills.some((skill) => skill.name === "skill-authoring" && skill.source === "devspace_system"), true);
 
-  const duplicatePrioritySkill = loaded.skills.find((skill) => skill.name === "duplicate-priority-skill");
-  assert.ok(duplicatePrioritySkill);
-  assert.equal(duplicatePrioritySkill.source, "local");
-  assert.match(duplicatePrioritySkill.filePath, /skills\/local\/duplicate-priority-skill\/SKILL\.md$/);
-
-  const legacySystemSkill = loaded.skills.find((skill) => skill.name === "skill-authoring-lite");
-  assert.ok(legacySystemSkill);
-  assert.doesNotMatch(legacySystemSkill.filePath, /skills\/core\/skill-authoring-lite\/SKILL\.md$/);
-  assert.equal(loaded.diagnostics.some((diagnostic) => String(diagnostic.message).includes("skills/core is deprecated")), true);
-  assert.equal(loaded.diagnostics.some((diagnostic) => diagnostic.type === "collision"), true);
-
-  const projectSkill = loaded.skills.find((skill) => skill.name === "project-skill");
-  assert.ok(projectSkill);
-  assert.match(formatPathForPrompt(projectSkill.filePath), /SKILL\.md$/);
-
-  const skillFileRead = resolveSkillReadPath(loaded.skills, new Set(), projectSkill.filePath);
-  assert.equal(skillFileRead?.isSkillFile, true);
-  assert.equal(skillFileRead?.absolutePath, projectSkill.filePath);
-
-  const resourcePath = join(projectSkill.baseDir, "references.md");
-  await writeFile(resourcePath, "reference\n");
-  assert.equal(resolveSkillReadPath(loaded.skills, new Set(), resourcePath), undefined);
+  const duplicate = loaded.skills.find((skill) => skill.name === "duplicate-priority-skill");
+  assert.ok(duplicate);
+  assert.equal(duplicate.source, "local");
+  assert.match(duplicate.filePath, /skills\/local\/duplicate-priority-skill\/SKILL\.md$/);
   assert.equal(
-    resolveSkillReadPath(loaded.skills, new Set([projectSkill.baseDir]), resourcePath)?.isSkillFile,
+    loaded.diagnostics.some((diagnostic) => String(diagnostic.message).includes("skills/core is deprecated")),
+    true,
+  );
+
+  const plan = loaded.skills.find((skill) => skill.name === "devspace-plan");
+  assert.ok(plan);
+  assert.equal(plan.source, "devspace_system");
+  assert.doesNotMatch(plan.filePath, /skills\/local\/devspace-plan\/SKILL\.md$/);
+  assert.match(plan.locator, /^skill:\/\/devspace-system\/devspace-plan\/SKILL\.md$/);
+
+  const resolvedPlan = await resolveSkillDefinition(loaded.skills, "/plan");
+  assert.equal(resolvedPlan.name, "devspace-plan");
+  assert.equal(resolvedPlan.qualifiedId, "devspace-plan");
+  assert.equal(resolvedPlan.source, "devspace_system");
+  assert.equal(resolvedPlan.alias, "/plan");
+  assert.equal(resolvedPlan.mode, "read_only");
+  assert.match(resolvedPlan.instructions, /# DevSpace Plan Workflow/);
+  assert.match(resolvedPlan.path, /^skill:\/\//);
+
+  const resolvedGoal = await resolveSkillDefinition(loaded.skills, "/goal");
+  assert.equal(resolvedGoal.name, "devspace-goal");
+  assert.equal(resolvedGoal.source, "devspace_system");
+  assert.equal(resolvedGoal.alias, "/goal");
+  assert.equal(resolvedGoal.mode, "normal");
+  assert.match(resolvedGoal.instructions, /# DevSpace Goal Workflow/);
+
+  const skillFileRead = resolveSkillReadPath(loaded.skills, new Set(), resolvedPlan.path);
+  assert.equal(skillFileRead?.isSkillFile, true);
+  assert.equal(skillFileRead?.skill.name, "devspace-plan");
+
+  const resourceLocator = resolvedPlan.path.replace("SKILL.md", "references/plan-state.md");
+  assert.equal(resolveSkillReadPath(loaded.skills, new Set(), resourceLocator), undefined);
+  const activated = new Set<string>();
+  markSkillActivated(activated, resolvedPlan.skill);
+  assert.equal(
+    resolveSkillReadPath(loaded.skills, activated, resourceLocator)?.isSkillFile,
     false,
   );
 
-  const resolvedPlan = await resolveSkillDefinition(loaded.skills, "/plan");
-  assert.equal(resolvedPlan.name, "create-plan");
-  assert.equal(resolvedPlan.source, "system");
-  assert.equal(resolvedPlan.alias, "/plan");
-  assert.equal(resolvedPlan.mode, "read_only");
-  assert.match(resolvedPlan.instructions, /# Create Plan/);
-
-  const resolvedGoal = await resolveSkillDefinition(loaded.skills, "/goal");
-  assert.equal(resolvedGoal.name, "define-goal");
-  assert.equal(resolvedGoal.source, "system");
-  assert.equal(resolvedGoal.alias, "/goal");
-  assert.equal(resolvedGoal.mode, "normal");
-
-  const resolvedExplicit = await resolveSkillDefinition(loaded.skills, "global-only-skill");
-  assert.equal(resolvedExplicit.name, "global-only-skill");
+  const resolvedExplicit = await resolveSkillDefinition(loaded.skills, "external-global-skill");
   assert.equal(resolvedExplicit.source, "global");
 } finally {
   await rm(root, { recursive: true, force: true });
+}
+
+async function writeSkill(
+  directory: string,
+  input: { name: string; description: string; body: string },
+): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "SKILL.md"),
+    [
+      "---",
+      `name: ${input.name}`,
+      `description: ${input.description}`,
+      "---",
+      "",
+      input.body,
+      "",
+    ].join("\n"),
+  );
 }

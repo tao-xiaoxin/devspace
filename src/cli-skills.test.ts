@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = mkdtempSync(join(tmpdir(), "devspace-cli-skills-test-"));
-const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
 try {
-  const help = execFileSync("node", ["--import", "tsx", "src/cli.ts", "help"], {
-    cwd: repoRoot,
+  const help = execFileSync(process.execPath, ["--import", "tsx", "src/cli.ts", "help"], {
+    cwd: projectRoot,
     encoding: "utf8",
   });
   assert.match(help, /devspace skills install/);
