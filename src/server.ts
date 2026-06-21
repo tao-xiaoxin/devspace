@@ -41,7 +41,13 @@ import {
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { validateShellCommand } from "./shell-policy.js";
-import { formatPathForPrompt } from "./skills.js";
+import {
+  formatPathForPrompt,
+  resolveSkillDefinition,
+  skillSourceLabel,
+  type SkillResolveMode,
+  type SkillSource,
+} from "./skills.js";
 import {
   installSkill,
   listInstalledSkills,
@@ -49,6 +55,12 @@ import {
   type InstalledSkillRecord,
   type SkillInstallSource,
 } from "./skill-manager.js";
+import {
+  normalizeGoalDefinition,
+  parseGoalDefinition,
+  serializeGoalDefinition,
+  type GoalDefinition,
+} from "./goal-definition.js";
 import { contentStats, contentText, toolError, type ToolContent } from "./tool-result.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -224,6 +236,7 @@ const workspaceSkillOutputSchema = z.object({
   name: z.string(),
   description: z.string(),
   path: z.string(),
+  source: z.enum(["system", "local", "installed", "global"]),
 });
 
 const installedSkillOutputSchema = z.object({
@@ -233,6 +246,27 @@ const installedSkillOutputSchema = z.object({
   path: z.string(),
   removable: z.boolean(),
   sourceType: z.enum(["workspace-installed", "global-installed"]),
+});
+
+const resolvedSkillOutputSchema = z.object({
+  name: z.string(),
+  source: z.enum(["system", "local", "installed", "global"]),
+  path: z.string(),
+  alias: z.string().optional(),
+  mode: z.enum(["read_only", "normal"]),
+  instructions: z.string(),
+});
+
+const goalDefinitionOutputSchema = z.object({
+  objective: z.string(),
+  scope: z
+    .object({
+      in: z.array(z.string()),
+      out: z.array(z.string()),
+    })
+    .optional(),
+  verification: z.array(z.string()).optional(),
+  stopConditions: z.array(z.string()).optional(),
 });
 
 const workspaceAgentsFileOutputSchema = z.object({
@@ -623,6 +657,7 @@ function createMcpServer(
           name: skill.name,
           description: skill.description,
           path: formatPathForPrompt(skill.filePath),
+          source: skill.source,
         }));
       const loadedAgentsFiles = agentsFiles.map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
@@ -691,6 +726,76 @@ function createMcpServer(
           collaborationMode: collaboration.mode,
         },
       };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "resolve_skill",
+    {
+      title: "Resolve skill",
+      description:
+        "Resolve a skill name or alias such as /plan or /goal for the current workspace. This tool only reads and returns skill instructions; it does not execute installation, file changes, or commands.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        nameOrAlias: z.string().describe("Skill name or alias such as create-plan, define-goal, /plan, or /goal."),
+      },
+      outputSchema: {
+        result: z.string(),
+        skill: resolvedSkillOutputSchema,
+      },
+      ...toolWidgetDescriptorMeta(config, "workspace"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, nameOrAlias }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      try {
+        const resolved = await resolveSkillDefinition(workspace.skills, nameOrAlias);
+        const content = [textBlock(resolved.instructions)];
+
+        logToolCall(config, {
+          tool: "resolve_skill",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: "resolve_skill",
+            card: {
+              workspaceId,
+              path: resolved.path,
+              summary: {
+                source: resolved.source,
+                mode: resolved.mode,
+                alias: resolved.alias,
+              },
+              payload: { content },
+            },
+          },
+          structuredContent: {
+            result: contentText(content),
+            skill: {
+              name: resolved.name,
+              source: resolved.source,
+              path: resolved.path,
+              alias: resolved.alias,
+              mode: resolved.mode,
+              instructions: resolved.instructions,
+            },
+          },
+        };
+      } catch (error) {
+        const response = toolError(error instanceof Error ? error.message : String(error));
+        logFailedToolResponse(config, {
+          tool: "resolve_skill",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
     },
   );
 
@@ -1034,19 +1139,7 @@ function createMcpServer(
         result: z.string(),
         recognized: z.boolean(),
         command: z.enum(["plan", "goal", "answer", "none"]),
-        mode: z.enum(["default", "plan"]).optional(),
-        goal: z
-          .object({
-            objective: z.string(),
-            status: z.enum(["active", "complete", "blocked"]),
-            tokenBudget: z.number().int().positive().optional(),
-            createdAt: z.string(),
-            updatedAt: z.string(),
-            timeUsedSeconds: z.number().int().nonnegative(),
-            completedAt: z.string().optional(),
-            blockedAt: z.string().optional(),
-          })
-          .optional(),
+        skill: resolvedSkillOutputSchema.optional(),
         prompt: userInputPromptOutputSchema.optional(),
       },
       ...toolWidgetDescriptorMeta(config, "plan"),
@@ -1054,7 +1147,7 @@ function createMcpServer(
     },
     async ({ workspaceId, message }) => {
       const startedAt = performance.now();
-      workspaces.getWorkspace(workspaceId);
+      const workspace = workspaces.getWorkspace(workspaceId);
       const pending = workspaceStore.getPendingUserInput(workspaceId);
       const parsed = parseWorkspaceCommand(message, pending);
 
@@ -1077,11 +1170,8 @@ function createMcpServer(
       }
 
       if (parsed.kind === "plan") {
-        const collaboration = workspaceStore.setCollaborationMode({
-          workspaceSessionId: workspaceId,
-          mode: "plan",
-        });
-        const content = [textBlock(parsed.argument ? `Plan mode on\n${parsed.argument}` : "Plan mode on")];
+        const resolved = await resolveSkillDefinition(workspace.skills, "/plan");
+        const content = [textBlock(`Resolved /plan to ${resolved.name} (${skillSourceLabel(resolved.source)}).`)];
         logToolCall(config, {
           tool: "handle_workspace_command",
           workspaceId,
@@ -1094,26 +1184,21 @@ function createMcpServer(
             result: contentText(content),
             recognized: true,
             command: "plan" as const,
-            mode: collaboration.mode,
+            skill: {
+              name: resolved.name,
+              source: resolved.source,
+              path: resolved.path,
+              alias: resolved.alias,
+              mode: resolved.mode,
+              instructions: resolved.instructions,
+            },
           },
         };
       }
 
       if (parsed.kind === "goal") {
-        if (!parsed.argument) {
-          const response = toolError("Goal command is missing an objective.");
-          logFailedToolResponse(config, {
-            tool: "handle_workspace_command",
-            workspaceId,
-          }, response.content, startedAt);
-          return response;
-        }
-
-        const goal = workspaceStore.saveGoal({
-          workspaceSessionId: workspaceId,
-          objective: parsed.argument,
-        });
-        const content = [textBlock("Goal created")];
+        const resolved = await resolveSkillDefinition(workspace.skills, "/goal");
+        const content = [textBlock(`Resolved /goal to ${resolved.name} (${skillSourceLabel(resolved.source)}).`)];
         logToolCall(config, {
           tool: "handle_workspace_command",
           workspaceId,
@@ -1126,15 +1211,13 @@ function createMcpServer(
             result: contentText(content),
             recognized: true,
             command: "goal" as const,
-            goal: {
-              objective: goal.objective,
-              status: goal.status,
-              tokenBudget: goal.tokenBudget,
-              createdAt: goal.createdAt,
-              updatedAt: goal.updatedAt,
-              timeUsedSeconds: goal.timeUsedSeconds,
-              completedAt: goal.completedAt,
-              blockedAt: goal.blockedAt,
+            skill: {
+              name: resolved.name,
+              source: resolved.source,
+              path: resolved.path,
+              alias: resolved.alias,
+              mode: resolved.mode,
+              instructions: resolved.instructions,
             },
           },
         };
@@ -1607,6 +1690,10 @@ function createMcpServer(
         goal: z
           .object({
             objective: z.string(),
+            scope: goalDefinitionOutputSchema.shape.scope,
+            verification: goalDefinitionOutputSchema.shape.verification,
+            stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
+            legacy: z.boolean().optional(),
             status: z.enum(["active", "complete", "blocked"]),
             tokenBudget: z.number().int().positive().optional(),
             createdAt: z.string(),
@@ -1624,6 +1711,7 @@ function createMcpServer(
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
       const goal = workspaceStore.getGoal(workspaceId);
+      const parsedGoal = goal ? parseGoalDefinition(goal.objective) : null;
       const content = [textBlock(goal ? formatGoalResult(goal) : "No active or historical goal for this workspace.")];
 
       logToolCall(config, {
@@ -1639,7 +1727,11 @@ function createMcpServer(
           result: contentText(content),
           goal: goal
             ? {
-                objective: goal.objective,
+                objective: parsedGoal?.definition.objective ?? goal.objective,
+                scope: parsedGoal?.definition.scope,
+                verification: parsedGoal?.definition.verification,
+                stopConditions: parsedGoal?.definition.stopConditions,
+                legacy: parsedGoal?.legacy,
                 status: goal.status,
                 tokenBudget: goal.tokenBudget,
                 createdAt: goal.createdAt,
@@ -1666,6 +1758,9 @@ function createMcpServer(
           .string()
           .describe("Workspace identifier returned by open_workspace."),
         objective: z.string().describe("Concrete objective to pursue."),
+        scope: goalDefinitionOutputSchema.shape.scope.optional(),
+        verification: goalDefinitionOutputSchema.shape.verification,
+        stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
         tokenBudget: z
           .number()
           .int()
@@ -1677,6 +1772,9 @@ function createMcpServer(
         result: z.string(),
         goal: z.object({
           objective: z.string(),
+          scope: goalDefinitionOutputSchema.shape.scope,
+          verification: goalDefinitionOutputSchema.shape.verification,
+          stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
           status: z.literal("active"),
           tokenBudget: z.number().int().positive().optional(),
           createdAt: z.string(),
@@ -1687,12 +1785,18 @@ function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "goal"),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ workspaceId, objective, tokenBudget }) => {
+    async ({ workspaceId, objective, scope, verification, stopConditions, tokenBudget }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
+      const definition = normalizeGoalDefinition({
+        objective,
+        scope,
+        verification,
+        stopConditions,
+      });
       const goal = workspaceStore.saveGoal({
         workspaceSessionId: workspaceId,
-        objective,
+        objective: serializeGoalDefinition(definition),
         tokenBudget,
       });
       const content = [textBlock(formatGoalResult(goal))];
@@ -1709,7 +1813,10 @@ function createMcpServer(
         structuredContent: {
           result: contentText(content),
           goal: {
-            objective: goal.objective,
+            objective: definition.objective,
+            scope: definition.scope,
+            verification: definition.verification,
+            stopConditions: definition.stopConditions,
             status: goal.status,
             tokenBudget: goal.tokenBudget,
             createdAt: goal.createdAt,
@@ -1727,18 +1834,26 @@ function createMcpServer(
     {
       title: "Update goal",
       description:
-        "Mark the current workspace-scoped goal complete or blocked.",
+        "Update the current workspace-scoped goal with lightweight objective, scope, verification, or status changes.",
       inputSchema: {
         workspaceId: z
           .string()
           .describe("Workspace identifier returned by open_workspace."),
-        status: z.enum(["complete", "blocked"]),
+        objective: z.string().optional(),
+        scope: goalDefinitionOutputSchema.shape.scope.optional(),
+        verification: goalDefinitionOutputSchema.shape.verification,
+        stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
+        status: z.enum(["active", "complete", "blocked"]).optional(),
       },
       outputSchema: {
         result: z.string(),
         goal: z.object({
           objective: z.string(),
-          status: z.enum(["complete", "blocked"]),
+          scope: goalDefinitionOutputSchema.shape.scope,
+          verification: goalDefinitionOutputSchema.shape.verification,
+          stopConditions: goalDefinitionOutputSchema.shape.stopConditions,
+          legacy: z.boolean().optional(),
+          status: z.enum(["active", "complete", "blocked"]),
           tokenBudget: z.number().int().positive().optional(),
           createdAt: z.string(),
           updatedAt: z.string(),
@@ -1750,11 +1865,28 @@ function createMcpServer(
       ...toolWidgetDescriptorMeta(config, "goal"),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ workspaceId, status }) => {
+    async ({ workspaceId, objective, scope, verification, stopConditions, status }) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
-      const goal = workspaceStore.updateGoalStatus({
+      const existing = workspaceStore.getGoal(workspaceId);
+      if (!existing) {
+        const response = toolError("No goal exists for this workspace.");
+        logFailedToolResponse(config, {
+          tool: "update_goal",
+          workspaceId,
+        }, response.content, startedAt);
+        return response;
+      }
+      const current = parseGoalDefinition(existing.objective);
+      const definition = normalizeGoalDefinition({
+        objective: objective ?? current.definition.objective,
+        scope: scope ?? current.definition.scope,
+        verification: verification ?? current.definition.verification,
+        stopConditions: stopConditions ?? current.definition.stopConditions,
+      });
+      const goal = workspaceStore.updateGoal({
         workspaceSessionId: workspaceId,
+        objective: serializeGoalDefinition(definition),
         status,
       });
       const content = [textBlock(formatGoalResult(goal, status === "complete"))];
@@ -1771,7 +1903,11 @@ function createMcpServer(
         structuredContent: {
           result: contentText(content),
           goal: {
-            objective: goal.objective,
+            objective: definition.objective,
+            scope: definition.scope,
+            verification: definition.verification,
+            stopConditions: definition.stopConditions,
+            legacy: false,
             status: goal.status,
             tokenBudget: goal.tokenBudget,
             createdAt: goal.createdAt,
@@ -2875,8 +3011,15 @@ function formatGoalResult(goal: {
   completedAt?: string;
   blockedAt?: string;
 }, includeCompletionNote = false): string {
+  const parsed = parseGoalDefinition(goal.objective);
   const lines = [
-    `Goal: ${goal.objective}`,
+    `Goal: ${parsed.definition.objective}`,
+    parsed.definition.scope
+      ? `Scope: In(${parsed.definition.scope.in.join("; ") || "none"}) / Out(${parsed.definition.scope.out.join("; ") || "none"})`
+      : undefined,
+    parsed.definition.verification?.length
+      ? `Verification: ${parsed.definition.verification.join("; ")}`
+      : undefined,
     `Status: ${goal.status}`,
     goal.tokenBudget !== undefined ? `Token budget: ${goal.tokenBudget}` : undefined,
     `Time used seconds: ${goal.timeUsedSeconds}`,

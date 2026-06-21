@@ -13,7 +13,7 @@ metadata:
 
 ## What This Skill Does
 
-Use this skill when the user drives DevSpace with concise workflow messages such as `/plan`, `/goal`, or compact answers to pending questions.
+Use this skill when the user drives DevSpace with concise workflow messages such as `/plan`, `/goal`, skill names, or compact answers to pending questions.
 
 ## Before Starting
 
@@ -31,7 +31,7 @@ Trigger on messages like:
 - `@dev /plan ...`
 - `/plan ...`
 
-Use `handle_workspace_command` first, then continue the planning workflow in `plan` mode.
+Use `resolve_skill("/plan")` first, then follow the returned `create-plan` instructions. Treat `/plan` as an alias, not a native slash command.
 
 ### Goal Workflow
 
@@ -40,13 +40,13 @@ Trigger on messages like:
 - `@dev /goal ...`
 - `/goal ...`
 
-Use `handle_workspace_command` first, then continue with `create_goal`, `get_goal`, and `update_goal` as needed.
+Use `resolve_skill("/goal")` first, then follow the returned `define-goal` instructions. If the user explicitly wants a lightweight persisted goal record, use `create_goal`, `get_goal`, and `update_goal` after the goal is well-defined.
 
 ### Compact Answers
 
 Trigger when there is pending `request_user_input` state and the user replies with compact text such as `1B，2A`, `1B, 2A`, or `1b 2a`.
 
-Prefer passing the raw reply through `handle_workspace_command` or `answer_user_input(text)` instead of paraphrasing it.
+Prefer passing the raw reply through `handle_workspace_command` only for compact answer parsing, or directly through `answer_user_input(text)`, instead of paraphrasing it.
 
 ### Batch File Changes
 

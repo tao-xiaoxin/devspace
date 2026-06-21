@@ -9,9 +9,9 @@ Inputs:
 
 Expected behavior:
 
-1. Call `handle_workspace_command`.
-2. Ensure the workspace moves to `plan` mode.
-3. Continue with planning tools and repository exploration.
+1. Call `resolve_skill("/plan")`.
+2. Read and follow the returned `create-plan` instructions.
+3. Keep the full `/plan` pass read-only.
 4. Keep replies short unless the user explicitly asks for detail.
 
 ## `/goal`
@@ -23,9 +23,9 @@ Inputs:
 
 Expected behavior:
 
-1. Call `handle_workspace_command`.
-2. Create or continue the workspace goal.
-3. Use `get_goal` and `update_goal` for lifecycle management.
+1. Call `resolve_skill("/goal")`.
+2. Read and follow the returned `define-goal` instructions.
+3. Only use `create_goal`, `get_goal`, or `update_goal` if the user explicitly wants a lightweight persisted goal record.
 
 ## Compact Answers
 

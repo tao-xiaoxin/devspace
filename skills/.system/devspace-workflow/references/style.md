@@ -9,8 +9,8 @@
 
 ## Good Status Examples
 
-- `Plan mode on`
-- `Goal created`
+- `Resolved /plan to create-plan`
+- `Resolved /goal to define-goal`
 - `Answer recorded`
 - `No workflow command recognized`
 

@@ -1,11 +1,12 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, cp } from "node:fs/promises";
+import { mkdtemp, mkdir, opendir, readFile, readdir, rename, rm, stat, lstat, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { assertAllowedPath, isPathInsideRoot } from "./roots.js";
 import type { ServerConfig } from "./config.js";
+import { loadWorkspaceSkills, skillSourceLabel } from "./skills.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,7 +71,8 @@ export async function installSkill(options: {
 }): Promise<InstalledSkillResult> {
   const sourceDir = await materializeSource(options.source, {
     githubBaseUrl: options.githubBaseUrl,
-    localPathResolver: options.localPathResolver,
+    localPathResolver: options.localPathResolver
+      ?? ((path: string) => assertAllowedPath(path, options.config.allowedRoots)),
     runGit: options.runGit,
   });
   try {
@@ -78,9 +80,21 @@ export async function installSkill(options: {
     const targetRoot = installRootForScope(options.config, options.workspaceRoot, options.scope);
     const targetPath = join(targetRoot, metadata.name);
     await mkdir(targetRoot, { recursive: true });
+    await validateSkillTree(metadata.baseDir);
+    await assertInstallConflicts(options.config, options.workspaceRoot, metadata.name, options.scope);
 
     await ensurePathMissing(targetPath, metadata.name, options.scope);
-    await cp(metadata.baseDir, targetPath, { recursive: true, errorOnExist: true, force: false });
+    const stagingPath = join(
+      targetRoot,
+      `.${metadata.name}.tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    try {
+      await cp(metadata.baseDir, stagingPath, { recursive: true, errorOnExist: true, force: false });
+      await rename(stagingPath, targetPath);
+    } catch (error) {
+      await rm(stagingPath, { recursive: true, force: true });
+      throw error;
+    }
 
     return {
       name: metadata.name,
@@ -211,6 +225,9 @@ async function readSkillMetadata(skillDir: string): Promise<ParsedSkillMetadata>
   }
 
   validateSkillName(name);
+  if (basename(skillDir) !== name) {
+    throw new Error(`Skill directory name must match frontmatter name: ${skillDir}`);
+  }
 
   return {
     name,
@@ -237,6 +254,48 @@ async function ensurePathMissing(targetPath: string, skillName: string, scope: S
 function validateSkillName(name: string): void {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
     throw new Error(`Invalid skill name: ${name}`);
+  }
+}
+
+async function validateSkillTree(root: string): Promise<void> {
+  const entries = await opendir(root);
+  for await (const entry of entries) {
+    const path = join(root, entry.name);
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Skill directory contains unsupported symlink: ${path}`);
+    }
+    if (stats.isDirectory()) {
+      await validateSkillTree(path);
+    }
+  }
+}
+
+async function assertInstallConflicts(
+  config: ServerConfig,
+  workspaceRoot: string | undefined,
+  skillName: string,
+  scope: SkillScope,
+): Promise<void> {
+  if (!workspaceRoot) return;
+
+  const loaded = loadWorkspaceSkills(config, workspaceRoot);
+  const existing = loaded.skills.find((skill) => skill.name === skillName);
+  if (!existing) return;
+
+  if (existing.source === "system" || existing.source === "local") {
+    throw new Error(
+      `Skill ${skillName} conflicts with an existing ${skillSourceLabel(existing.source)} skill.`,
+    );
+  }
+
+  if (
+    (scope === "workspace" && existing.source === "installed") ||
+    (scope === "global" && existing.source === "global")
+  ) {
+    throw new Error(
+      `Skill ${skillName} already exists in ${scope === "workspace" ? "项目已安装" : "全局已安装"} source.`,
+    );
   }
 }
 
@@ -272,6 +331,7 @@ async function materializeSource(
   const tempRoot = await mkdtemp(join(tmpdir(), "devspace-skill-"));
   const checkoutRoot = join(tempRoot, "repo");
   const parsed = source.kind === "github_url" ? parseGithubTreeUrl(source.url) : source;
+  validateRelativeSkillPath(parsed.path);
   const repoBaseUrl = options.githubBaseUrl ?? "https://github.com/";
   const repoUrl = parsed.repoUrl ?? new URL(`${parsed.repo}.git`, repoBaseUrl).toString();
   const ref = parsed.ref ?? "main";
@@ -313,4 +373,11 @@ export function parseGithubTreeUrl(url: string): { repo: string; path: string; r
     ref: parts[3],
     path: parts.slice(4).join("/"),
   };
+}
+
+function validateRelativeSkillPath(path: string): void {
+  const normalized = path.trim();
+  if (!normalized || normalized.startsWith("/") || normalized.split("/").includes("..")) {
+    throw new Error(`Invalid skill path: ${path}`);
+  }
 }

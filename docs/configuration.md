@@ -208,9 +208,11 @@ Use `--no-tunnel` to override configured tunnel mode for one run.
 
 Project skill layout:
 
-- `skills/core`: built-in DevSpace skills
+- system built-in DevSpace skills
 - `skills/local`: project skills meant to be committed
 - `skills/installed`: user-installed project skills, typically git-ignored
+
+ChatGPT Plus on the web cannot natively install or register Codex Skills. DevSpace provides the MCP-side skill installation, discovery, and resolution layer instead.
 
 Manage installed skills with:
 

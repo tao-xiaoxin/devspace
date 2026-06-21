@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -19,8 +19,11 @@ const root = await mkdtemp(join(tmpdir(), "devspace-skill-manager-test-"));
 try {
   const projectRoot = join(root, "project");
   const agentDir = join(root, "agent");
-  const localSkill = join(root, "local-skill");
+  const localSkill = join(root, "local-installed-skill");
   const remoteRepo = join(root, "remote-skill-repo");
+  const conflictingLocal = join(root, "create-plan");
+  const invalidDirSkill = join(root, "mismatched-dir");
+  const symlinkSkill = join(root, "symlink-skill");
 
   await mkdir(projectRoot, { recursive: true });
   await mkdir(join(agentDir, "skills"), { recursive: true });
@@ -58,6 +61,46 @@ try {
   await execFileAsync("git", ["add", "."], { cwd: remoteRepo });
   await execFileAsync("git", ["commit", "-m", "Initial commit"], { cwd: remoteRepo });
 
+  await mkdir(conflictingLocal, { recursive: true });
+  await writeFile(
+    join(conflictingLocal, "SKILL.md"),
+    [
+      "---",
+      "name: create-plan",
+      "description: Should conflict with system skill.",
+      "---",
+      "",
+      "# Conflicting Local Skill",
+    ].join("\n"),
+  );
+
+  await mkdir(invalidDirSkill, { recursive: true });
+  await writeFile(
+    join(invalidDirSkill, "SKILL.md"),
+    [
+      "---",
+      "name: different-name",
+      "description: Directory name mismatch.",
+      "---",
+      "",
+      "# Invalid Skill",
+    ].join("\n"),
+  );
+
+  await mkdir(symlinkSkill, { recursive: true });
+  await writeFile(
+    join(symlinkSkill, "SKILL.md"),
+    [
+      "---",
+      "name: symlink-skill",
+      "description: Should be rejected because of symlink contents.",
+      "---",
+      "",
+      "# Symlink Skill",
+    ].join("\n"),
+  );
+  await symlink(join(root, "project"), join(symlinkSkill, "linked-project"));
+
   const config = loadConfig({
     DEVSPACE_ALLOWED_ROOTS: `${projectRoot},${root}`,
     DEVSPACE_AGENT_DIR: agentDir,
@@ -85,10 +128,7 @@ try {
     workspaceRoot: projectRoot,
     scope: "workspace",
   });
-  assert.deepEqual(
-    listedWorkspace.map((skill) => skill.name),
-    ["local-installed-skill"],
-  );
+  assert.deepEqual(listedWorkspace.map((skill) => skill.name), ["local-installed-skill"]);
 
   const installedGlobal = await installSkill({
     config,
@@ -129,6 +169,62 @@ try {
         localPathResolver: (path) => path,
       }),
     /already exists/,
+  );
+
+  await assert.rejects(
+    () =>
+      installSkill({
+        config,
+        workspaceRoot: projectRoot,
+        scope: "workspace",
+        source: { kind: "local", path: conflictingLocal },
+        localPathResolver: (path) => path,
+      }),
+    /系统内置/,
+  );
+
+  await assert.rejects(
+    () =>
+      installSkill({
+        config,
+        workspaceRoot: projectRoot,
+        scope: "workspace",
+        source: { kind: "local", path: invalidDirSkill },
+        localPathResolver: (path) => path,
+      }),
+    /directory name must match/,
+  );
+
+  await assert.rejects(
+    () =>
+      installSkill({
+        config,
+        workspaceRoot: projectRoot,
+        scope: "workspace",
+        source: { kind: "local", path: symlinkSkill },
+        localPathResolver: (path) => path,
+      }),
+    /symlink/,
+  );
+
+  await assert.rejects(
+    () =>
+      installSkill({
+        config,
+        workspaceRoot: projectRoot,
+        scope: "global",
+        source: {
+          kind: "github",
+          repo: "example/skills",
+          repoUrl: `file://${remoteRepo}`,
+          path: "../escape",
+          ref: "master",
+        },
+        runGit: async (args) => {
+          await execFileAsync("git", args);
+        },
+      }),
+    /Invalid skill path/,
   );
 
   const removedWorkspace = await removeInstalledSkill({

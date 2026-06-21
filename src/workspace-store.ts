@@ -115,6 +115,12 @@ export interface WorkspaceStore {
     tokenBudget?: number;
   }): WorkspaceGoal;
   getGoal(workspaceSessionId: string): WorkspaceGoal | undefined;
+  updateGoal(input: {
+    workspaceSessionId: string;
+    objective?: string;
+    tokenBudget?: number;
+    status?: "active" | "complete" | "blocked";
+  }): WorkspaceGoal;
   updateGoalStatus(input: {
     workspaceSessionId: string;
     status: "complete" | "blocked";
@@ -328,29 +334,39 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     return row ? rowToWorkspaceGoal(row) : undefined;
   }
 
-  updateGoalStatus(input: {
+  updateGoal(input: {
     workspaceSessionId: string;
-    status: "complete" | "blocked";
+    objective?: string;
+    tokenBudget?: number;
+    status?: "active" | "complete" | "blocked";
   }): WorkspaceGoal {
     const existing = this.getGoal(input.workspaceSessionId);
     if (!existing) {
       throw new Error("No goal exists for this workspace.");
     }
-    if (existing.status !== "active") {
-      throw new Error(`Goal is already ${existing.status}. Create a new goal to continue.`);
-    }
 
     const updatedAt = new Date().toISOString();
-    const completedAt = input.status === "complete" ? updatedAt : null;
-    const blockedAt = input.status === "blocked" ? updatedAt : null;
-    const activeSeconds = calculateGoalActiveSeconds(existing, updatedAt);
+    const nextStatus = input.status ?? existing.status;
+    const completedAt = nextStatus === "complete"
+      ? existing.completedAt ?? updatedAt
+      : null;
+    const blockedAt = nextStatus === "blocked"
+      ? existing.blockedAt ?? updatedAt
+      : null;
+    const activeSeconds = nextStatus === "active"
+      ? String(existing.timeUsedSeconds)
+      : String(calculateGoalActiveSeconds(existing, updatedAt));
 
     this.database.db
       .update(workspaceGoals)
       .set({
-        status: input.status,
+        objective: input.objective ?? existing.objective,
+        tokenBudget: input.tokenBudget === undefined
+          ? (existing.tokenBudget === undefined ? null : String(existing.tokenBudget))
+          : String(input.tokenBudget),
+        status: nextStatus,
         updatedAt,
-        activeSeconds: String(activeSeconds),
+        activeSeconds,
         completedAt,
         blockedAt,
       })
@@ -363,6 +379,16 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     }
 
     return updated;
+  }
+
+  updateGoalStatus(input: {
+    workspaceSessionId: string;
+    status: "complete" | "blocked";
+  }): WorkspaceGoal {
+    return this.updateGoal({
+      workspaceSessionId: input.workspaceSessionId,
+      status: input.status,
+    });
   }
 
   setCollaborationMode(input: {

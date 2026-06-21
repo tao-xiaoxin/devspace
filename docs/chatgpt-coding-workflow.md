@@ -81,11 +81,15 @@ Skills are enabled by default for coding-agent workflows.
 
 DevSpace discovers skills from:
 
-- built-in DevSpace skills in `skills/core`
+- built-in DevSpace skills
 - workspace-local skills in `skills/local`
 - workspace-installed skills in `skills/installed`
 - `DEVSPACE_AGENT_DIR`, which defaults to `~/.codex`
 - optional paths from `DEVSPACE_SKILL_PATHS`
+
+ChatGPT Plus on the web cannot natively install or register Codex Skills. In this setup, DevSpace provides MCP-based skill installation, discovery, and resolution.
+
+`@devspace /plan` and `@devspace /goal` are workflow aliases, not native ChatGPT slash commands.
 
 User-installed project skills can be managed through DevSpace itself:
 
@@ -99,6 +103,14 @@ User-installed project skills can be managed through DevSpace itself:
 
 ```text
 请调用 remove_skill，删除当前 workspace 里名为 research 的 installed skill。
+```
+
+```text
+@devspace /plan 为跨平台服务管理增加 restart、status 和 logs 支持
+```
+
+```text
+@devspace /goal 将 DevSpace 的第三方 Skill 安装流程收敛为可测试、可回滚、跨平台兼容的实现
 ```
 
 When `open_workspace` returns matching skills, the model should read the

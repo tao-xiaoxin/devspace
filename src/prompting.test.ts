@@ -26,8 +26,9 @@ assert.match(instructions, /Prefer action over explanation\./);
 assert.match(instructions, /Keep responses terse and operational\./);
 assert.match(instructions, /Do not add long design discussion, repeated background, or speculative future improvements unless the user explicitly asks for them\./);
 assert.match(instructions, /When the user sends a short reply such as '1B, 2A', treat it as workflow input and continue instead of explaining the mechanism back to them\./);
-assert.match(instructions, /When available skills include a matching workflow skill, read that skill before handling slash-style workspace commands or compact user-input replies\./);
-assert.match(instructions, /For concise workflow commands and compact pending-input replies, prefer handle_workspace_command or answer_user_input\(text\) over paraphrasing the user's message\./);
+assert.match(instructions, /When the user mentions a skill name, \/plan, or \/goal, prefer resolve_skill to load the relevant SKILL\.md instructions\./);
+assert.match(instructions, /Treat \/plan and \/goal as aliases, not native ChatGPT slash commands\./);
+assert.match(instructions, /Use handle_workspace_command only for compact pending-input replies or legacy workflow compatibility\./);
 
 const planInstruction = workspaceInstruction("plan", false);
 assert.match(planInstruction, /ask clarifying questions with request_user_input only when they materially affect the plan/);

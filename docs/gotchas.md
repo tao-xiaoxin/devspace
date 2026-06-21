@@ -198,12 +198,12 @@ DevSpace looks in:
 - `DEVSPACE_AGENT_DIR`, defaulting to `~/.codex`
 - `skills/local`
 - `skills/installed`
-- `skills/core`
+- system built-in skills
 - `DEVSPACE_SKILL_PATHS`
 
 Recommended meaning:
 
-- `skills/core`: built-in DevSpace skills
+- system built-in DevSpace skills
 - `skills/local`: project-defined skills you want to commit
 - `skills/installed`: user-installed project skills that should stay git-ignored
 
