@@ -20,6 +20,7 @@ This directory contains DevSpace-owned system Skills only.
 - Project-local, installed, and global Skills cannot override reserved names or aliases.
 - External Skills belong in `skills/installed/`, not in `.system`.
 - Old system Skill identifiers are not supported; use the names listed in the table above.
+- System Skill frontmatter and the change-log Version column track the root `package.json` version. Update them in the same release commit.
 
 ## OpenAI Skills upstream record
 
@@ -34,8 +35,8 @@ This directory contains DevSpace-owned system Skills only.
 
 | Date | Version | Change |
 |---|---:|---|
-| 2026-06-22 | 3.0 | `create-plan` and `devspace-plan` merged into `plan` |
-| 2026-06-22 | 3.0 | `define-goal` and `devspace-goal` merged into `goal` |
-| 2026-06-22 | 3.0 | `devspace-workflow` renamed to `workflow` |
-| 2026-06-22 | 3.0 | architecture and authoring Skills consolidated; `-lite` copies removed |
-| 2026-06-22 | 3.0 | full OpenAI Skill mirror removed from the package |
+| 2026-06-22 | 1.0.1 | `create-plan` and `devspace-plan` merged into `plan` |
+| 2026-06-22 | 1.0.1 | `define-goal` and `devspace-goal` merged into `goal` |
+| 2026-06-22 | 1.0.1 | `devspace-workflow` renamed to `workflow` |
+| 2026-06-22 | 1.0.1 | architecture and authoring Skills consolidated; `-lite` copies removed |
+| 2026-06-22 | 1.0.1 | full OpenAI Skill mirror removed from the package |

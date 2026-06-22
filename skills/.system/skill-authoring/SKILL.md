@@ -3,7 +3,7 @@ name: skill-authoring
 description: Create or revise DevSpace Skills with clear workflows, stable system routing, controlled resource access, and test coverage.
 license: MIT
 metadata:
-  version: 3.0.0
+  version: 1.0.1
   author: DevSpace
   category: system-engineering
   updated: 2026-06-22

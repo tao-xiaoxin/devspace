@@ -3,7 +3,7 @@ name: goal
 description: Define and maintain a durable, verifiable project Goal in DevSpace. Use for /goal when the user explicitly wants an outcome to persist across sessions.
 license: MIT
 metadata:
-  version: 3.0.0
+  version: 1.0.1
   author: DevSpace
   category: system-workflow
   updated: 2026-06-22

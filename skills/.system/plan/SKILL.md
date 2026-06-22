@@ -3,7 +3,7 @@ name: plan
 description: Create, resume, and maintain a durable DevSpace implementation Plan for the current project. Use for /plan and for requests that require read-only analysis before code changes.
 license: MIT
 metadata:
-  version: 3.0.0
+  version: 1.0.1
   author: DevSpace
   category: system-workflow
   updated: 2026-06-22

@@ -3,7 +3,7 @@ name: workflow
 description: Recover and coordinate DevSpace project workflow state across sessions, including Plan, Goal, mode, routing, and concise history.
 license: MIT
 metadata:
-  version: 3.0.0
+  version: 1.0.1
   author: DevSpace
   category: system-workflow
   updated: 2026-06-22
