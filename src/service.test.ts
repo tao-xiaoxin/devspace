@@ -68,8 +68,17 @@ try {
     detectServiceManagerKind({
       platform: "linux",
       env: {},
+      hasSystemdRuntimeMarkers: false,
     }),
     "unsupported",
+  );
+  assert.equal(
+    detectServiceManagerKind({
+      platform: "linux",
+      env: {},
+      hasSystemdRuntimeMarkers: true,
+    }),
+    "systemd-user",
   );
   assert.equal(
     detectServiceManagerKind({

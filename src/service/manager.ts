@@ -25,6 +25,7 @@ interface ManagerContext {
 interface DetectServiceManagerOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  hasSystemdRuntimeMarkers?: boolean;
 }
 
 export function createServiceManager(context: ManagerContext): ServiceManager {
@@ -73,6 +74,7 @@ export async function restartServiceIfRunning(
 export function detectServiceManagerKind(options: DetectServiceManagerOptions = {}): ServiceManagerKind {
   const currentPlatform = options.platform ?? platform();
   const env = options.env ?? process.env;
+  const systemdRuntimeMarkers = options.hasSystemdRuntimeMarkers ?? hasSystemdRuntimeMarkers();
 
   if (currentPlatform === "darwin") return "launchd";
   if (currentPlatform === "win32") return "windows-task-scheduler";
@@ -80,13 +82,19 @@ export function detectServiceManagerKind(options: DetectServiceManagerOptions = 
     return hasSystemdUserSession(env) ? "systemd-user" : "wsl-task-scheduler-fallback";
   }
   if (currentPlatform === "linux") {
-    return hasSystemdUserSession(env) ? "systemd-user" : "unsupported";
+    return hasSystemdUserSession(env) || systemdRuntimeMarkers
+      ? "systemd-user"
+      : "unsupported";
   }
   return "unsupported";
 }
 
 function hasSystemdUserSession(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.SYSTEMD_EXEC_PID || env.XDG_RUNTIME_DIR || env.DBUS_SESSION_BUS_ADDRESS);
+}
+
+function hasSystemdRuntimeMarkers(): boolean {
+  return existsSync("/run/systemd/system") || existsSync(`/run/user/${process.getuid?.() ?? 0}`);
 }
 
 function createUnsupportedManager(config: ServerConfig): ServiceManager {
