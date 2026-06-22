@@ -21,6 +21,15 @@ This directory contains DevSpace-owned system Skills only.
 - External Skills belong in `skills/installed/`, not in `.system`.
 - Old system Skill identifiers are not supported; use the names listed in the table above.
 
+## OpenAI Skills upstream record
+
+| Field | Value |
+|---|---|
+| Upstream repository | `https://github.com/openai/skills.git` |
+| Upstream Git commit | `972cb867affac58fda9afa76bb1a19b399a278cf` |
+| Last sync check (UTC) | `2026-06-21T23:57:02Z` |
+| Sync policy | DevSpace does not mirror the full upstream repository into `.system`; external Skills are installed individually into `skills/installed/`. |
+
 ## Change log
 
 | Date | Version | Change |
