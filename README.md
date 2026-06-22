@@ -224,6 +224,60 @@ ChatGPT Plus on the web cannot natively install or register Codex Skills. DevSpa
 
 `@devspace /plan` and `@devspace /goal` are stable alias-style workflow conventions. `/plan` always resolves to system `plan`; `/goal` always resolves to system `goal`; local, installed, and global Skills cannot silently override them. `skills/.system/README.md` records the system Skill policy and change log.
 
+## Using `/plan` and `/goal`
+
+Use these aliases in a normal ChatGPT message after DevSpace is connected. They are not native ChatGPT slash commands. Open the workspace first, then state the requested outcome clearly.
+
+### `/plan`: inspect first, then save an implementation plan
+
+Use `/plan` when you want repository analysis and a durable implementation plan before any file changes. DevSpace loads the current Plan when one exists, enters Plan Mode, inspects the repository read-only, then persists a Plan with ordered steps, validation, risks, and a revision number.
+
+```text
+@devspace Open /path/to/project.
+
+/plan Add a hello CLI command that prints "Hello DevSpace".
+First inspect the project and create a persistent Plan.
+Do not modify project files or run commands that write to the repository.
+```
+
+A good `/plan` request states the outcome, relevant constraints, and whether implementation should wait for approval. To review a saved Plan later, ask DevSpace to open the same workspace and read the current Plan before taking action.
+
+```text
+@devspace Open /path/to/project.
+
+Read the current Plan and summarize its title, revision, pending steps, validation, and blockers. Do not modify files.
+```
+
+### `/goal`: keep a durable outcome across sessions
+
+Use `/goal` when an objective should remain available across future DevSpace sessions. A Goal records the objective, scope, success criteria, verification, stop conditions, current status, and exact metrics where evidence exists. DevSpace reads the active Goal first and will not silently replace it with a competing one.
+
+```text
+@devspace Open /path/to/project.
+
+/goal Create a durable Goal to add a hello CLI command.
+Success criteria: the command runs and prints "Hello DevSpace".
+Verification: run the command and its automated test.
+Stop condition: the project requirements change to a non-CLI interface.
+Do not modify files yet.
+```
+
+You can explicitly start or pause the Goal work timer, or update its status when work is blocked, completed, or archived.
+
+```text
+@devspace Start the current Goal work timer.
+
+@devspace Pause the current Goal work timer and show the measured work duration.
+```
+
+### Using them together
+
+Create a Goal for the long-lived outcome, then create a Plan that breaks the Goal into concrete steps and explicitly links the Plan to that Goal. Goal progress is calculated only from completed steps in that linked Plan; DevSpace does not guess a percentage. Provider token metrics are recorded only when an API/provider returns real token usage and a stable request ID, so ChatGPT web usage is not filled in automatically.
+
+```text
+@devspace Create a Plan for the current Goal, link the Plan to the Goal, and save it without modifying files.
+```
+
 Manage installed skills with:
 
 ```bash
