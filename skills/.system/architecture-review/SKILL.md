@@ -3,7 +3,7 @@ name: architecture-review
 description: Perform evidence-driven architecture review for a DevSpace workspace without bypassing project instructions, tests, workflow state, or authorization boundaries.
 license: MIT
 metadata:
-  version: 1.0.1
+  version: 1.0.2
   author: DevSpace
   category: system-engineering
   updated: 2026-06-22

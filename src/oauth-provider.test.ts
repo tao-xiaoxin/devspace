@@ -281,9 +281,15 @@ function readPersistedState(statePath: string) {
   try {
     const clients = (db.prepare("select client_json from oauth_clients order by created_at asc").all() as { client_json: string }[])
       .map((row) => JSON.parse(row.client_json));
-    const tokens = db.prepare("select token_hash, token_kind, client_id, scopes_json, expires_at, resource from oauth_tokens order by token_hash asc").all() as {
+    const accessTokens = db.prepare("select token_hash, client_id, scopes_json, expires_at, resource from oauth_access_tokens order by token_hash asc").all() as {
       token_hash: string;
-      token_kind: "access" | "refresh";
+      client_id: string;
+      scopes_json: string;
+      expires_at: number;
+      resource: string | null;
+    }[];
+    const refreshTokens = db.prepare("select token_hash, client_id, scopes_json, expires_at, resource from oauth_refresh_tokens order by token_hash asc").all() as {
+      token_hash: string;
       client_id: string;
       scopes_json: string;
       expires_at: number;
@@ -299,12 +305,8 @@ function readPersistedState(statePath: string) {
 
     return {
       clients,
-      accessTokens: tokens
-        .filter((row) => row.token_kind === "access")
-        .map(rowToStoredToken),
-      refreshTokens: tokens
-        .filter((row) => row.token_kind === "refresh")
-        .map(rowToStoredToken),
+      accessTokens: accessTokens.map(rowToStoredToken),
+      refreshTokens: refreshTokens.map(rowToStoredToken),
       approvedConsents: consents.map((row) => ({
         clientId: row.client_id,
         redirectUri: row.redirect_uri,

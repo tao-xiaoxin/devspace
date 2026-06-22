@@ -65,9 +65,7 @@ export const workspaceGoals = sqliteTable(
     completedAt: text("completed_at"),
     blockedAt: text("blocked_at"),
   },
-  (table) => [
-    index("workspace_goals_status_idx").on(table.status, table.updatedAt),
-  ],
+  (table) => [index("workspace_goals_status_idx").on(table.status, table.updatedAt)],
 );
 
 export const workspaceModes = sqliteTable(
@@ -261,23 +259,25 @@ export const oauthAuthorizationCodes = sqliteTable(
   (table) => [index("oauth_authorization_codes_expiry_idx").on(table.expiresAtMs)],
 );
 
-export const oauthTokens = sqliteTable(
-  "oauth_tokens",
-  {
-    tokenHash: text("token_hash").notNull(),
-    tokenKind: text("token_kind").notNull(),
-    clientId: text("client_id")
-      .notNull()
-      .references(() => oauthClients.clientId, { onDelete: "cascade" }),
-    scopesJson: text("scopes_json").notNull(),
-    expiresAt: integer("expires_at").notNull(),
-    resource: text("resource"),
-  },
-  (table) => [
-    primaryKey({ columns: [table.tokenHash, table.tokenKind] }),
-    index("oauth_tokens_expiry_idx").on(table.expiresAt),
-  ],
-);
+export const oauthAccessTokens = sqliteTable("oauth_access_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthClients.clientId, { onDelete: "cascade" }),
+  scopesJson: text("scopes_json").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  resource: text("resource"),
+});
+
+export const oauthRefreshTokens = sqliteTable("oauth_refresh_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthClients.clientId, { onDelete: "cascade" }),
+  scopesJson: text("scopes_json").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  resource: text("resource"),
+});
 
 export const oauthConsents = sqliteTable(
   "oauth_consents",

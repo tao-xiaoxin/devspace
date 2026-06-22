@@ -239,7 +239,7 @@ async function serve(args: string[] = []): Promise<void> {
 
   const { createServer } = await import("./server.js");
   const config = loadConfig();
-  const { app } = createServer(config);
+  const { app, close } = createServer(config);
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(`devspace listening on http://${config.host}:${config.port}${config.mcpPath}`);
     console.log(`public base url: ${config.publicBaseUrl}`);
@@ -257,7 +257,10 @@ async function serve(args: string[] = []): Promise<void> {
 
   const shutdown = () => {
     tunnel?.stop();
-    httpServer.close(() => process.exit(0));
+    httpServer.close(() => {
+      close();
+      process.exit(0);
+    });
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);

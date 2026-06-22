@@ -1106,7 +1106,6 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
   close(): void {
     this.database.close();
   }
-
   private currentPlanRevision(projectWorkflowKey: string): number {
     const row = this.database.sqlite
       .prepare("select revision from workflow_plans where project_workflow_key = ? and is_current = 1 limit 1")

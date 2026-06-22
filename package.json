@@ -1,6 +1,6 @@
 {
   "name": "@waishnav/devspace",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Expose a secure local coding workspace through an MCP server.",
   "type": "module",
   "main": "dist/server.js",
@@ -27,6 +27,7 @@
     "dev": "node scripts/dev-server.mjs",
     "start": "node dist/cli.js serve",
     "test": "node scripts/dev-server.test.mjs && node --import tsx src/config.test.ts && node --import tsx src/config-operations.test.ts && node --import tsx src/oauth-provider.test.ts && node --import tsx src/cloudflare-tunnel.test.ts && node --import tsx src/shell-policy.test.ts && node --import tsx src/tool-result.test.ts && node --import tsx src/roots.test.ts && node --import tsx src/skills.test.ts && node --import tsx src/skill-manager.test.ts && node --import tsx src/cli-skills.test.ts && node --import tsx src/goal-definition.test.ts && node --import tsx src/prompting.test.ts && node --import tsx src/workspace-commands.test.ts && node --import tsx src/workspace-operations.test.ts && node --import tsx src/workspaces.test.ts && node --import tsx src/workflow-store.test.ts && node --import tsx src/workflow-migration.test.ts && node --import tsx src/package-smoke.test.ts && node --import tsx src/review-checkpoints.test.ts && node --import tsx src/service.test.ts",
+    "test": "node scripts/dev-server.test.mjs && node --import tsx src/config.test.ts && node --import tsx src/config-operations.test.ts && node --import tsx src/oauth-provider.test.ts && node --import tsx src/oauth-store.test.ts && node --import tsx src/cloudflare-tunnel.test.ts && node --import tsx src/shell-policy.test.ts && node --import tsx src/tool-result.test.ts && node --import tsx src/roots.test.ts && node --import tsx src/skills.test.ts && node --import tsx src/skill-manager.test.ts && node --import tsx src/cli-skills.test.ts && node --import tsx src/goal-definition.test.ts && node --import tsx src/prompting.test.ts && node --import tsx src/workspace-commands.test.ts && node --import tsx src/workspace-operations.test.ts && node --import tsx src/workspaces.test.ts && node --import tsx src/workflow-store.test.ts && node --import tsx src/workflow-migration.test.ts && node --import tsx src/package-smoke.test.ts && node --import tsx src/review-checkpoints.test.ts && node --import tsx src/service.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [],

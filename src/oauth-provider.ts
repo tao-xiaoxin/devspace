@@ -1,6 +1,5 @@
 import { timingSafeEqual, randomBytes, randomUUID, createHash } from "node:crypto";
 import type { Response } from "express";
-import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { AccessDeniedError, InvalidGrantError, InvalidRequestError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -10,8 +9,10 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import { dirname } from "node:path";
 import {
   consentKey,
+  SqliteOAuthClientsStore,
   SqliteOAuthStore,
   type AuthorizationCodeRecord,
 } from "./oauth-store.js";
@@ -110,54 +111,6 @@ function requestedScopesAllowed(requested: string[], supported: string[]): boole
   return requested.every((scope) => supported.includes(scope));
 }
 
-function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(redirectUri);
-  } catch {
-    return false;
-  }
-
-  if (["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) return true;
-  return allowedHosts.includes(parsed.hostname);
-}
-
-export class SqliteOAuthClientsStore implements OAuthRegisteredClientsStore {
-
-  constructor(
-    private readonly allowedRedirectHosts: string[],
-    private readonly store: SqliteOAuthStore,
-  ) {}
-
-  getClient(clientId: string): OAuthClientInformationFull | undefined {
-    return this.store.getClient(clientId);
-  }
-
-  registerClient(
-    client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
-  ): OAuthClientInformationFull {
-    if (!client.redirect_uris.every((uri) => redirectHostAllowed(uri, this.allowedRedirectHosts))) {
-      throw new InvalidRequestError("Client redirect_uri is not allowed for this DevSpace server");
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    const registered: OAuthClientInformationFull = {
-      ...client,
-      client_id: `devspace-${randomUUID()}`,
-      client_id_issued_at: now,
-      token_endpoint_auth_method: client.token_endpoint_auth_method ?? "none",
-      grant_types: client.grant_types ?? ["authorization_code", "refresh_token"],
-      response_types: client.response_types ?? ["code"],
-    };
-    this.store.saveClient(registered);
-    return registered;
-  }
-
-  dumpClients(): OAuthClientInformationFull[] {
-    return this.store.listClients();
-  }
-}
-
 export class SingleUserOAuthProvider implements OAuthServerProvider {
   readonly clientsStore: SqliteOAuthClientsStore;
   private readonly store: SqliteOAuthStore;
@@ -166,10 +119,14 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   constructor(
     private readonly config: OAuthConfig,
     resourceServerUrl: URL,
+    stateDir?: string,
   ) {
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
-    this.store = new SqliteOAuthStore(config.statePath);
-    this.clientsStore = new SqliteOAuthClientsStore(config.allowedRedirectHosts, this.store);
+    const resolvedStateDir = config.statePath
+      ? dirname(config.statePath)
+      : stateDir ?? process.cwd();
+    this.store = new SqliteOAuthStore(resolvedStateDir, config.statePath);
+    this.clientsStore = new SqliteOAuthClientsStore(this.store, config.allowedRedirectHosts);
   }
 
   async authorize(
@@ -313,18 +270,17 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new AccessDeniedError("Refresh token cannot grant requested scopes");
     }
 
-    this.store.deleteRefreshToken(refreshTokenHash);
-    return this.issueTokens(client.client_id, requestedScopes, resource ?? record.resource);
+    return this.issueTokens(
+      client.client_id,
+      requestedScopes,
+      resource ?? (record.resource ? new URL(record.resource) : undefined),
+      refreshTokenHash,
+    );
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const hashed = hashToken(token);
-    const record = this.store.getAccessToken(hashed);
+    const record = this.store.getAccessToken(hashToken(token));
     if (!record) {
-      throw new InvalidTokenError("Invalid or expired access token");
-    }
-    if (record.expiresAt < Math.floor(Date.now() / 1000)) {
-      this.store.deleteAccessToken(hashed);
       throw new InvalidTokenError("Invalid or expired access token");
     }
 
@@ -333,13 +289,17 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       clientId: record.clientId,
       scopes: record.scopes,
       expiresAt: record.expiresAt,
-      resource: record.resource,
+      resource: record.resource ? new URL(record.resource) : undefined,
     };
   }
 
   async revokeToken(_client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
     const hashed = hashToken(request.token);
     this.store.revokeToken(hashed);
+  }
+
+  close(): void {
+    this.store.close();
   }
 
   private validCodeRecord(
@@ -353,25 +313,40 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     return record;
   }
 
-  private issueTokens(clientId: string, scopes: string[], resource?: URL): OAuthTokens {
+  private issueTokens(
+    clientId: string,
+    scopes: string[],
+    resource?: URL,
+    consumedRefreshTokenHash?: string,
+  ): OAuthTokens {
     const now = Math.floor(Date.now() / 1000);
     const accessToken = randomToken();
     const refreshToken = randomToken();
     const accessExpiresAt = now + this.config.accessTokenTtlSeconds;
     const refreshExpiresAt = now + this.config.refreshTokenTtlSeconds;
 
-    this.store.saveAccessToken(hashToken(accessToken), {
-      clientId,
-      scopes,
-      expiresAt: accessExpiresAt,
-      resource,
-    });
-    this.store.saveRefreshToken(hashToken(refreshToken), {
-      clientId,
-      scopes,
-      expiresAt: refreshExpiresAt,
-      resource,
-    });
+    const saved = this.store.saveTokenPair(
+      {
+        accessTokenHash: hashToken(accessToken),
+        accessToken: {
+          clientId,
+          scopes,
+          expiresAt: accessExpiresAt,
+          resource: resource?.href,
+        },
+        refreshTokenHash: hashToken(refreshToken),
+        refreshToken: {
+          clientId,
+          scopes,
+          expiresAt: refreshExpiresAt,
+          resource: resource?.href,
+        },
+      },
+      consumedRefreshTokenHash,
+    );
+    if (!saved) {
+      throw new InvalidGrantError("Invalid refresh token");
+    }
 
     return {
       access_token: accessToken,
