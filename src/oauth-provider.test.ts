@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { stat, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,6 +10,7 @@ import { SingleUserOAuthProvider, type OAuthConfig } from "./oauth-provider.js";
 import { databasePath } from "./db/client.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
+import { removeTempDirSync } from "./test-utils.js";
 
 const root = mkdtempSync(join(tmpdir(), "devspace-oauth-provider-test-"));
 const statePath = join(root, "state", "oauth.json");
@@ -23,9 +24,11 @@ const config: OAuthConfig = {
   allowedRedirectHosts: ["localhost"],
   statePath,
 };
+const providers: SingleUserOAuthProvider[] = [];
 
 try {
   const firstProvider = new SingleUserOAuthProvider(config, resourceServerUrl);
+  providers.push(firstProvider);
   const client = firstProvider.clientsStore.registerClient({
     client_name: "test client",
     redirect_uris: ["http://localhost/callback"],
@@ -51,6 +54,7 @@ try {
   assert.equal(dirStats.mode & 0o777, 0o700);
 
   const secondProvider = new SingleUserOAuthProvider(config, resourceServerUrl);
+  providers.push(secondProvider);
   const persistedClient = secondProvider.clientsStore.getClient(client.client_id);
   assert.equal(persistedClient?.client_id, client.client_id);
 
@@ -103,6 +107,7 @@ try {
   );
   await chmod(expiredStatePath, 0o600);
   const expiredProvider = new SingleUserOAuthProvider({ ...config, statePath: expiredStatePath }, resourceServerUrl);
+  providers.push(expiredProvider);
   await assert.rejects(
     () => expiredProvider.exchangeRefreshToken(client, assertString(firstTokens.refresh_token), undefined, resourceServerUrl),
     InvalidGrantError,
@@ -116,6 +121,7 @@ try {
   writeFileSync(corruptStatePath, "{not valid json");
   await chmod(corruptStatePath, 0o600);
   const corruptProvider = new SingleUserOAuthProvider({ ...config, statePath: corruptStatePath }, resourceServerUrl);
+  providers.push(corruptProvider);
   assert.equal(corruptProvider.clientsStore.getClient(client.client_id), undefined);
   const repairedState = readPersistedState(corruptStatePath);
   assert.deepEqual(repairedState, { clients: [], accessTokens: [], refreshTokens: [], approvedConsents: [] });
@@ -125,11 +131,13 @@ try {
   writeFileSync(emptyStatePath, "");
   await chmod(emptyStatePath, 0o600);
   const emptyProvider = new SingleUserOAuthProvider({ ...config, statePath: emptyStatePath }, resourceServerUrl);
+  providers.push(emptyProvider);
   assert.equal(emptyProvider.clientsStore.getClient(client.client_id), undefined);
   const rewrittenEmptyState = readPersistedState(emptyStatePath);
   assert.deepEqual(rewrittenEmptyState, { clients: [], accessTokens: [], refreshTokens: [], approvedConsents: [] });
 
   const customProvider = new SingleUserOAuthProvider({ ...config, statePath: customStatePath }, resourceServerUrl);
+  providers.push(customProvider);
   customProvider.clientsStore.registerClient({
     client_name: "custom state client",
     redirect_uris: ["http://localhost/custom"],
@@ -160,6 +168,7 @@ try {
     { ...config, statePath: expiredAccessStatePath },
     resourceServerUrl,
   );
+  providers.push(expiredAccessProvider);
   await assert.rejects(
     () => expiredAccessProvider.verifyAccessToken(assertString(expiredAccessTokens.access_token)),
     InvalidTokenError,
@@ -169,6 +178,7 @@ try {
 
   const consentStatePath = join(root, "consent", "oauth.json");
   const consentProvider = new SingleUserOAuthProvider({ ...config, statePath: consentStatePath }, resourceServerUrl);
+  providers.push(consentProvider);
   const consentClient = consentProvider.clientsStore.registerClient({
     client_name: "consent client",
     redirect_uris: ["http://localhost/consent", "http://localhost/other"],
@@ -227,6 +237,7 @@ try {
     { ...config, scopes: ["devspace", "admin"], statePath: expandedScopeStatePath },
     resourceServerUrl,
   );
+  providers.push(expandedScopeProvider);
   const expandedScopeClient = expandedScopeProvider.clientsStore.registerClient({
     client_name: "expanded scope client",
     redirect_uris: ["http://localhost/expanded"],
@@ -247,6 +258,7 @@ try {
   assert.match(assertString(expandedScopeGet.body), /Owner password/);
 
   const restartedConsentProvider = new SingleUserOAuthProvider({ ...config, statePath: consentStatePath }, resourceServerUrl);
+  providers.push(restartedConsentProvider);
   const restartedConsentClient = restartedConsentProvider.clientsStore.getClient(consentClient.client_id);
   assert.equal(Boolean(restartedConsentClient), true);
   const restartedConsentGet = mockResponse("GET");
@@ -259,7 +271,10 @@ try {
   assert.equal(JSON.stringify(finalConsentState).includes(assertString(firstTokens.access_token)), false);
   assert.equal(JSON.stringify(finalConsentState).includes(assertString(firstTokens.refresh_token)), false);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  for (const provider of providers.splice(0).reverse()) {
+    provider.close();
+  }
+  removeTempDirSync(root);
 }
 
 function issueTokens(

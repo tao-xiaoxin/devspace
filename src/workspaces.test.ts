@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +8,7 @@ import { loadConfig } from "./config.js";
 import { GitWorktreeError } from "./git-worktrees.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
+import { removeTempDir } from "./test-utils.js";
 
 const execFileAsync = promisify(execFile);
 const root = await mkdtemp(join(tmpdir(), "devspace-workspace-test-"));
@@ -263,7 +264,7 @@ try {
     assert.equal(aliasWorkspace.workspace.sourceRoot, join(aliasRoot, "git-project"));
   }
 } finally {
-  await rm(root, { recursive: true, force: true });
+  await removeTempDir(root);
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {

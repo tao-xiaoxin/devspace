@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
 } from "./config-operations.js";
 import { loadDevspaceFiles, writeDevspaceAuth } from "./user-config.js";
 import type { ServiceManager } from "./service/types.js";
+import { removeTempDirSync } from "./test-utils.js";
 
 const root = mkdtempSync(join(tmpdir(), "devspace-config-ops-test-"));
 process.env.DEVSPACE_CONFIG_DIR = root;
@@ -100,7 +101,7 @@ try {
 
   await assert.rejects(() => setConfigPort(0, import.meta.url, { manager: testManager }), /between 1 and 65535/);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  removeTempDirSync(root);
   delete process.env.DEVSPACE_CONFIG_DIR;
   delete process.env.DEVSPACE_STATE_DIR;
   delete process.env.DEVSPACE_OAUTH_OWNER_TOKEN;

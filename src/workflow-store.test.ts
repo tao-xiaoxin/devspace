@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { SqliteWorkspaceStore, WorkflowRevisionConflictError } from "./workspace-store.js";
+import { removeTempDir } from "./test-utils.js";
 
 const root = await mkdtemp(join(tmpdir(), "devspace-workflow-store-test-"));
 
@@ -202,5 +203,5 @@ try {
 
   store.close();
 } finally {
-  await rm(root, { recursive: true, force: true });
+  await removeTempDir(root);
 }

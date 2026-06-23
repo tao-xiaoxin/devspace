@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { databasePath } from "./db/client.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
+import { removeTempDir } from "./test-utils.js";
 
 const root = await mkdtemp(join(tmpdir(), "devspace-workflow-migration-test-"));
 
@@ -74,5 +75,5 @@ try {
   assert.equal(reopened.getWorkflowHistory({ workspaceSessionId: "new", limit: 50 }).events.length, eventCount);
   reopened.close();
 } finally {
-  await rm(root, { recursive: true, force: true });
+  await removeTempDir(root);
 }
