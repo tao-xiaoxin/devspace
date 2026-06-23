@@ -31,7 +31,7 @@ for (const path of requiredAssets) {
 }
 
 for (const path of requiredAssets.filter((asset) => asset.endsWith("/SKILL.md"))) {
-  const contents = readFileSync(resolve(projectRoot, path), "utf8");
+  const contents = normalizeNewlines(readFileSync(resolve(projectRoot, path), "utf8"));
   assert.match(
     contents,
     new RegExp(`\\n  version: ${escapeRegExp(packageVersion)}\\n`),
@@ -52,4 +52,8 @@ for (const removedPath of [
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeNewlines(value: string): string {
+  return value.replace(/\r\n/g, "\n");
 }
