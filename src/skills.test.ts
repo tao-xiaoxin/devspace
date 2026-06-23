@@ -76,7 +76,7 @@ try {
   assert.equal(loaded.skills.some((skill) => skill.name === "installed-skill" && skill.source === "installed"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "global-only-skill" && skill.source === "global"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "external-global-skill" && skill.source === "global"), true);
-  assert.equal(loaded.skills.some((skill) => skill.baseDir.includes("/skills/core/")), false);
+  assert.equal(loaded.skills.some((skill) => skill.baseDir.includes(join("skills", "core"))), false);
   assert.deepEqual(
     loaded.skills.filter((skill) => skill.source === "devspace_system").map((skill) => skill.name).sort(),
     ["architecture-review", "goal", "plan", "skill-authoring", "workflow"],
@@ -85,12 +85,12 @@ try {
   const duplicate = loaded.skills.find((skill) => skill.name === "duplicate-priority-skill");
   assert.ok(duplicate);
   assert.equal(duplicate.source, "local");
-  assert.match(duplicate.filePath, /skills\/local\/duplicate-priority-skill\/SKILL\.md$/);
+  assert.equal(duplicate.filePath.endsWith(join("skills", "local", "duplicate-priority-skill", "SKILL.md")), true);
 
   const plan = loaded.skills.find((skill) => skill.name === "plan");
   assert.ok(plan);
   assert.equal(plan.source, "devspace_system");
-  assert.doesNotMatch(plan.filePath, /skills\/local\/plan\/SKILL\.md$/);
+  assert.equal(plan.filePath.endsWith(join("skills", "local", "plan", "SKILL.md")), false);
   assert.match(plan.locator, /^skill:\/\/devspace-system\/plan\/SKILL\.md$/);
 
   const resolvedPlan = await resolveSkillDefinition(loaded.skills, "/plan");
