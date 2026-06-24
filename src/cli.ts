@@ -243,35 +243,24 @@ async function runDoctor(): Promise<void> {
 
 function runConfigCommand(args: string[]): void {
   const [subcommand, key, ...rest] = args;
-  const files = loadDevspaceFiles();
 
-  if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
+  if (!subcommand) {
+    printConfigShow();
+    return;
+  }
+
+  if (subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
     printConfigHelp();
     return;
   }
 
   if (subcommand === "get") {
-    console.log(JSON.stringify(files.config, null, 2));
+    console.log(JSON.stringify(loadDevspaceFiles().config, null, 2));
     return;
   }
 
   if (subcommand === "show") {
-    const show = buildConfigShowResult();
-    if (args.includes("--json")) {
-      console.log(JSON.stringify(show, null, 2));
-      return;
-    }
-
-    console.log([
-      `bind host: ${show.host}`,
-      `port: ${show.port}`,
-      `public base URL: ${show.publicBaseUrl}`,
-      `public MCP URL: ${show.publicUrl}`,
-      `allowed hosts: ${show.allowedHosts.join(", ")}`,
-      `Owner password: ${show.accessKey}`,
-      `config file: ${show.configPath}`,
-      `auth file: ${show.authPath}`,
-    ].join("\n"));
+    printConfigShow(args.includes("--json"));
     return;
   }
 
@@ -317,6 +306,25 @@ function runConfigCommand(args: string[]): void {
   printConfigUpdate(setConfigPublicBaseUrl(value));
 }
 
+function printConfigShow(json = false): void {
+  const show = buildConfigShowResult();
+  if (json) {
+    console.log(JSON.stringify(show, null, 2));
+    return;
+  }
+
+  console.log([
+    `bind host: ${show.host}`,
+    `port: ${show.port}`,
+    `public base URL: ${show.publicBaseUrl}`,
+    `public MCP URL: ${show.publicUrl}`,
+    `allowed hosts: ${show.allowedHosts.join(", ")}`,
+    `Owner password: ${show.accessKey}`,
+    `config file: ${show.configPath}`,
+    `auth file: ${show.authPath}`,
+  ].join("\n"));
+}
+
 function printConfigUpdate(result: ConfigUpdateResult): void {
   console.log([result.warning, result.message].filter(Boolean).join("\n"));
 }
@@ -340,7 +348,7 @@ function printHelp(): void {
       "   help       Show this help, or `devspace help config`",
       "   version    Print the installed version",
       "",
-      "Use `devspace config` to view configuration commands.",
+      "Use `devspace config` to show current settings, or `devspace config --help` for configuration commands.",
       "Use `devspace serve` with DEVSPACE_PUBLIC_BASE_URL for a one-run tunnel override.",
     ].join("\n"),
   );

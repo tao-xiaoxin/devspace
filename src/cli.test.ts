@@ -17,15 +17,15 @@ const topLevelHelp = runCli(["--help"]);
 assert.match(topLevelHelp, /^usage: devspace \[--version\] \[--help\] <command> \[<args>]$/m);
 assert.match(topLevelHelp, /start and connect a local MCP server/);
 assert.match(topLevelHelp, /manage persistent DevSpace settings/);
-assert.match(topLevelHelp, /Use `devspace config` to view configuration commands\./);
+assert.match(topLevelHelp, /Use `devspace config` to show current settings/);
 
-const configHelp = runCli(["config"]);
+const configHelp = runCli(["config", "--help"]);
 assert.match(configHelp, /^usage: devspace config <command> \[<args>]$/m);
 assert.match(configHelp, /inspect effective settings/);
 assert.match(configHelp, /change persistent server settings/);
 assert.match(configHelp, /key\s+Rotate the Owner password and revoke saved OAuth sessions/);
 assert.equal(runCli(["help", "config"]), configHelp);
-assert.equal(runCli(["config", "--help"]), configHelp);
+assert.equal(runCli(["config", "-h"]), configHelp);
 
 const root = mkdtempSync(join(tmpdir(), "devspace-cli-config-test-"));
 try {
@@ -37,6 +37,12 @@ try {
   assert.match(runCli(["config", "host", "127.0.0.1"], env), /Updated local bind host/);
   assert.match(runCli(["config", "port", "8787"], env), /Updated local bind port/);
   assert.match(runCli(["config", "domain", "devspace.example.com/mcp"], env), /public base URL/);
+
+  const defaultShow = runCli(["config"], env);
+  assert.ok(defaultShow.includes("bind host: 127.0.0.1"));
+  assert.ok(defaultShow.includes("port: 8787"));
+  assert.ok(defaultShow.includes("public MCP URL: https://devspace.example.com/mcp"));
+  assert.ok(defaultShow.includes("Owner password: (not configured)"));
 
   const shown = JSON.parse(runCli(["config", "show", "--json"], env)) as {
     host: string;
