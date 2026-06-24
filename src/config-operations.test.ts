@@ -14,6 +14,8 @@ import { SqliteOAuthClientsStore, SqliteOAuthStore } from "./oauth-store.js";
 import { loadDevspaceFiles, writeDevspaceAuth } from "./user-config.js";
 
 const root = mkdtempSync(join(tmpdir(), "devspace-config-operations-test-"));
+const originalOwnerToken = process.env.DEVSPACE_OAUTH_OWNER_TOKEN;
+delete process.env.DEVSPACE_OAUTH_OWNER_TOKEN;
 process.env.DEVSPACE_CONFIG_DIR = join(root, "config");
 process.env.DEVSPACE_STATE_DIR = join(root, "state");
 
