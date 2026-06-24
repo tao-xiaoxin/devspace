@@ -49,12 +49,15 @@ async function main(argv: string[]): Promise<void> {
       runConfigCommand(args);
       return;
     case "help":
-      if (args[0] === "config") {
+      if ((rawCommand === "--help" || rawCommand === "-h") && args.length === 1 && args[0] === "config") {
         printConfigHelp();
-      } else {
-        printHelp();
+        return;
       }
-      return;
+      if (args.length === 0) {
+        printHelp();
+        return;
+      }
+      throw new Error(`Unknown help target: ${args.join(" ")}. Use \`devspace --help <command>\`.`);
     case "version":
       printVersion();
       return;
@@ -250,8 +253,7 @@ function runConfigCommand(args: string[]): void {
   }
 
   if (subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
-    printConfigHelp();
-    return;
+    throw new Error(`Unknown config command: ${subcommand}. Use \`devspace --help config\`.`);
   }
 
   if (subcommand === "get") {
@@ -342,13 +344,14 @@ function printHelp(): void {
       "   doctor     Check configuration, runtime, and native dependencies",
       "",
       "manage persistent DevSpace settings",
-      "   config     Show configuration command help",
+      "   config     Show current effective settings",
       "",
       "get help and version information",
-      "   help       Show this help, or `devspace help config`",
+      "   help       Show this help",
       "   version    Print the installed version",
       "",
-      "Use `devspace config` to show current settings, or `devspace config --help` for configuration commands.",
+      "Use `devspace config` to show current settings.",
+      "Use `devspace --help config` for configuration commands.",
       "Use `devspace serve` with DEVSPACE_PUBLIC_BASE_URL for a one-run tunnel override.",
     ].join("\n"),
   );

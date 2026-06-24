@@ -18,14 +18,14 @@ assert.match(topLevelHelp, /^usage: devspace \[--version\] \[--help\] <command> 
 assert.match(topLevelHelp, /start and connect a local MCP server/);
 assert.match(topLevelHelp, /manage persistent DevSpace settings/);
 assert.match(topLevelHelp, /Use `devspace config` to show current settings/);
+assert.match(topLevelHelp, /Use `devspace --help config` for configuration commands/);
 
-const configHelp = runCli(["config", "--help"]);
+const configHelp = runCli(["--help", "config"]);
 assert.match(configHelp, /^usage: devspace config <command> \[<args>]$/m);
 assert.match(configHelp, /inspect effective settings/);
 assert.match(configHelp, /change persistent server settings/);
 assert.match(configHelp, /key\s+Rotate the Owner password and revoke saved OAuth sessions/);
-assert.equal(runCli(["help", "config"]), configHelp);
-assert.equal(runCli(["config", "-h"]), configHelp);
+assert.equal(runCli(["-h", "config"]), configHelp);
 
 const root = mkdtempSync(join(tmpdir(), "devspace-cli-config-test-"));
 try {
