@@ -7,6 +7,15 @@ import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { satisfies } from "semver";
 import { loadConfig } from "./config.js";
 import {
+  buildConfigShowResult,
+  resetConfigKey,
+  setConfigDomain,
+  setConfigHost,
+  setConfigPort,
+  setConfigPublicBaseUrl,
+  type ConfigUpdateResult,
+} from "./config-operations.js";
+import {
   generateOwnerToken,
   loadDevspaceFiles,
   writeDevspaceAuth,
@@ -40,7 +49,11 @@ async function main(argv: string[]): Promise<void> {
       runConfigCommand(args);
       return;
     case "help":
-      printHelp();
+      if (args[0] === "config") {
+        printConfigHelp();
+      } else {
+        printHelp();
+      }
       return;
     case "version":
       printVersion();
@@ -232,8 +245,60 @@ function runConfigCommand(args: string[]): void {
   const [subcommand, key, ...rest] = args;
   const files = loadDevspaceFiles();
 
-  if (!subcommand || subcommand === "get") {
+  if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
+    printConfigHelp();
+    return;
+  }
+
+  if (subcommand === "get") {
     console.log(JSON.stringify(files.config, null, 2));
+    return;
+  }
+
+  if (subcommand === "show") {
+    const show = buildConfigShowResult();
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(show, null, 2));
+      return;
+    }
+
+    console.log([
+      `bind host: ${show.host}`,
+      `port: ${show.port}`,
+      `public base URL: ${show.publicBaseUrl}`,
+      `public MCP URL: ${show.publicUrl}`,
+      `allowed hosts: ${show.allowedHosts.join(", ")}`,
+      `Owner password: ${show.accessKey}`,
+      `config file: ${show.configPath}`,
+      `auth file: ${show.authPath}`,
+    ].join("\n"));
+    return;
+  }
+
+  if (subcommand === "port") {
+    printConfigUpdate(setConfigPort(key ?? ""));
+    return;
+  }
+
+  if (subcommand === "host") {
+    printConfigUpdate(setConfigHost(key ?? ""));
+    return;
+  }
+
+  if (subcommand === "domain") {
+    const value = [key, ...rest].join(" ").trim();
+    printConfigUpdate(setConfigDomain(value));
+    return;
+  }
+
+  if (subcommand === "key") {
+    const result = resetConfigKey();
+    console.log([
+      "Owner password rotated. Existing OAuth clients and tokens were cleared.",
+      `New Owner password: ${result.ownerToken}`,
+      `Saved to: ${result.authPath}`,
+      "Restart DevSpace for the new Owner password to take effect.",
+    ].join("\n"));
     return;
   }
 
@@ -249,29 +314,59 @@ function runConfigCommand(args: string[]): void {
     throw new Error("Missing publicBaseUrl value.");
   }
 
-  writeDevspaceConfig({
-    ...files.config,
-    publicBaseUrl: normalizeOptionalPublicBaseUrl(value),
-  });
-  console.log(`Updated ${files.configPath}`);
+  printConfigUpdate(setConfigPublicBaseUrl(value));
+}
+
+function printConfigUpdate(result: ConfigUpdateResult): void {
+  console.log([result.warning, result.message].filter(Boolean).join("\n"));
 }
 
 function printHelp(): void {
   console.log(
     [
-      "DevSpace",
+      "usage: devspace [--version] [--help] <command> [<args>]",
       "",
-      "Usage:",
-      "  devspace                 Run first-time setup if needed, then start the server",
-      "  devspace serve           Start the server",
-      "  devspace init            Create or update ~/.devspace/config.json and auth.json",
-      "  devspace doctor          Show config, runtime, and native dependency status",
-      "  devspace config get      Print persisted config",
-      "  devspace config set publicBaseUrl <url|null>",
-      "  devspace -v, --version   Print the installed version",
+      "These are common DevSpace commands used in various situations:",
       "",
-      "For temporary tunnels:",
-      "  DEVSPACE_PUBLIC_BASE_URL=https://example.trycloudflare.com devspace serve",
+      "start and connect a local MCP server",
+      "   init       Create or update local configuration",
+      "   serve      Start the MCP server",
+      "   doctor     Check configuration, runtime, and native dependencies",
+      "",
+      "manage persistent DevSpace settings",
+      "   config     Show configuration command help",
+      "",
+      "get help and version information",
+      "   help       Show this help, or `devspace help config`",
+      "   version    Print the installed version",
+      "",
+      "Use `devspace config` to view configuration commands.",
+      "Use `devspace serve` with DEVSPACE_PUBLIC_BASE_URL for a one-run tunnel override.",
+    ].join("\n"),
+  );
+}
+
+function printConfigHelp(): void {
+  console.log(
+    [
+      "usage: devspace config <command> [<args>]",
+      "",
+      "These are common DevSpace configuration commands:",
+      "",
+      "inspect effective settings",
+      "   show [--json]                 Show effective server settings and masked Owner password",
+      "   get                           Print persisted config JSON (legacy-compatible)",
+      "",
+      "change persistent server settings",
+      "   host <host>                   Set the local bind host",
+      "   port <port>                   Set the local bind port",
+      "   domain <domain-or-url>        Set the public origin; a trailing /mcp is accepted",
+      "   key                           Rotate the Owner password and revoke saved OAuth sessions",
+      "",
+      "compatibility command",
+      "   set publicBaseUrl <url|null>  Set or clear the persisted public base URL",
+      "",
+      "Configuration changes are saved locally. Restart DevSpace for them to take effect.",
     ].join("\n"),
   );
 }
@@ -283,13 +378,6 @@ function printVersion(): void {
   }
 
   console.log(packageJson.version);
-}
-
-function normalizeOptionalPublicBaseUrl(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "null" || trimmed === "none") return null;
-
-  return normalizePublicBaseUrl(trimmed);
 }
 
 function normalizePublicBaseUrl(value: string): string {
