@@ -55,7 +55,8 @@ try {
 
   const legacyPublicBaseUrl = setConfigPublicBaseUrl("https://legacy.example.com:8443/path/?query=value#fragment");
   assert.equal(loadDevspaceFiles().config.publicBaseUrl, "https://legacy.example.com:8443/path");
-  assert.match(legacyPublicBaseUrl.message, /https:\/\/legacy\.example\.com:8443\/path/);
+  assert.match(legacyPublicBaseUrl.message, /https:\/\/legacy\.example\.com:8443\/path\/mcp/);
+  assert.equal(buildConfigShowResult().publicUrl, "https://legacy.example.com:8443/path/mcp");
   assert.throws(() => setConfigPublicBaseUrl("ftp://legacy.example.com"), /must use http or https/);
   assert.throws(() => setConfigPublicBaseUrl("not a URL"), /valid http or https URL/);
 

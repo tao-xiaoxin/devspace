@@ -38,7 +38,7 @@ export function buildConfigShowResult(env: NodeJS.ProcessEnv = process.env): Con
     host: settings.host,
     port: settings.port,
     publicBaseUrl: settings.publicBaseUrl,
-    publicUrl: new URL(MCP_PATH, settings.publicBaseUrl).toString(),
+    publicUrl: buildMcpUrl(settings.publicBaseUrl),
     allowedHosts: settings.allowedHosts,
     accessKey: maskSecret(ownerToken),
     configPath: files.configPath,
@@ -81,7 +81,7 @@ export function setConfigDomain(value: string, env: NodeJS.ProcessEnv = process.
   writeDevspaceConfig({ ...files.config, publicBaseUrl }, env);
 
   return {
-    message: `Updated public domain to ${new URL(publicBaseUrl).hostname}. MCP URL: ${new URL(MCP_PATH, publicBaseUrl).toString()}. Restart DevSpace for the change to take effect.`,
+    message: `Updated public domain to ${new URL(publicBaseUrl).hostname}. MCP URL: ${buildMcpUrl(publicBaseUrl)}. Restart DevSpace for the change to take effect.`,
   };
 }
 
@@ -102,7 +102,7 @@ export function setConfigPublicBaseUrl(
   const publicBaseUrl = normalizeConfiguredPublicBaseUrl(trimmed);
   writeDevspaceConfig({ ...files.config, publicBaseUrl }, env);
   return {
-    message: `Updated public base URL to ${publicBaseUrl}. MCP URL: ${new URL(MCP_PATH, publicBaseUrl).toString()}. Restart DevSpace for the change to take effect.`,
+    message: `Updated public base URL to ${publicBaseUrl}. MCP URL: ${buildMcpUrl(publicBaseUrl)}. Restart DevSpace for the change to take effect.`,
   };
 }
 
@@ -189,6 +189,12 @@ function normalizeConfiguredPublicBaseUrl(value: string): string {
     }
     throw new Error("publicBaseUrl must be a valid http or https URL.");
   }
+}
+
+function buildMcpUrl(publicBaseUrl: string): string {
+  const url = new URL(publicBaseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${MCP_PATH}`;
+  return url.toString();
 }
 
 function maskSecret(secret: string | undefined): string {
