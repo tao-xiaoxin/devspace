@@ -38,7 +38,7 @@ export function buildConfigShowResult(env: NodeJS.ProcessEnv = process.env): Con
     host: settings.host,
     port: settings.port,
     publicBaseUrl: settings.publicBaseUrl,
-    publicUrl: new URL(MCP_PATH, settings.publicBaseUrl).toString(),
+    publicUrl: buildMcpUrl(settings.publicBaseUrl),
     allowedHosts: settings.allowedHosts,
     accessKey: maskSecret(ownerToken),
     configPath: files.configPath,
@@ -81,7 +81,7 @@ export function setConfigDomain(value: string, env: NodeJS.ProcessEnv = process.
   writeDevspaceConfig({ ...files.config, publicBaseUrl }, env);
 
   return {
-    message: `Updated public domain to ${new URL(publicBaseUrl).hostname}. MCP URL: ${new URL(MCP_PATH, publicBaseUrl).toString()}. Restart DevSpace for the change to take effect.`,
+    message: `Updated public domain to ${new URL(publicBaseUrl).hostname}. MCP URL: ${buildMcpUrl(publicBaseUrl)}. Restart DevSpace for the change to take effect.`,
   };
 }
 
@@ -99,7 +99,11 @@ export function setConfigPublicBaseUrl(
     };
   }
 
-  return setConfigDomain(trimmed, env);
+  const publicBaseUrl = normalizeConfiguredPublicBaseUrl(trimmed);
+  writeDevspaceConfig({ ...files.config, publicBaseUrl }, env);
+  return {
+    message: `Updated public base URL to ${publicBaseUrl}. MCP URL: ${buildMcpUrl(publicBaseUrl)}. Restart DevSpace for the change to take effect.`,
+  };
 }
 
 export function setConfigKey(
@@ -144,7 +148,11 @@ function validateHost(value: string): string {
     throw new Error(`Invalid host: ${value}`);
   }
   if (isIP(host) !== 0 || host === "localhost") return host;
-  if (!/^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host)) {
+  const labels = host.split(".");
+  if (
+    host.length > 253
+    || labels.some((label) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label))
+  ) {
     throw new Error(`Invalid host: ${value}`);
   }
   return host;
@@ -165,8 +173,30 @@ function normalizeConfiguredDomain(value: string): string {
   return `https://${host}`;
 }
 
+function normalizeConfiguredPublicBaseUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("publicBaseUrl must use http or https.");
+    }
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString().replace(/\/$/, "");
+  } catch (error) {
+    if (error instanceof Error && error.message === "publicBaseUrl must use http or https.") {
+      throw error;
+    }
+    throw new Error("publicBaseUrl must be a valid http or https URL.");
+  }
+}
+
+function buildMcpUrl(publicBaseUrl: string): string {
+  const url = new URL(publicBaseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${MCP_PATH}`;
+  return url.toString();
+}
+
 function maskSecret(secret: string | undefined): string {
-  if (!secret) return "(not configured)";
-  if (secret.length <= 6) return "*".repeat(secret.length);
-  return `${secret.slice(0, 3)}${"*".repeat(Math.max(8, secret.length - 5))}${secret.slice(-2)}`;
+  return secret ? "********" : "(not configured)";
 }
