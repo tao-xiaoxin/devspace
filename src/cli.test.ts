@@ -63,8 +63,20 @@ try {
 }
 
 function runCli(args: string[], overrides: NodeJS.ProcessEnv = {}): string {
+  const env = { ...process.env };
+  for (const key of [
+    "HOST",
+    "PORT",
+    "DEVSPACE_ALLOWED_ROOTS",
+    "DEVSPACE_ALLOWED_HOSTS",
+    "DEVSPACE_OAUTH_OWNER_TOKEN",
+    "DEVSPACE_PUBLIC_BASE_URL",
+  ]) {
+    delete env[key];
+  }
+
   return execFileSync("node", ["--import", "tsx", "src/cli.ts", ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...overrides },
+    env: { ...env, ...overrides },
   });
 }
