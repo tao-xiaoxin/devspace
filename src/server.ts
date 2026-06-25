@@ -3101,9 +3101,8 @@ export function createServer(config = loadConfig()): RunningServer {
   const reviewCheckpoints = createReviewCheckpointManager();
 
   if (config.logging.trustProxy) {
-    // DevSpace sits behind exactly one local reverse proxy: Nginx.
-    // Do not trust arbitrary forwarded chains from public clients.
-    app.set("trust proxy", 1);
+    // DevSpace only trusts the loopback Nginx proxy in front of the local server.
+    app.set("trust proxy", "loopback");
   }
 
   app.use((req, res, next) => {
