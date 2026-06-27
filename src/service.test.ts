@@ -92,7 +92,7 @@ try {
   assert.equal(status.installed, true);
   assert.equal(status.endpoint, "https://devspace.example.com/mcp");
   const doctor = await manager.doctor();
-  assert.equal(doctor.checks.some((check) => check.level === "warn" && /running from source/.test(check.message)), true);
+  assert.equal(doctor.checks.some((check) => check.level === "info" && /running from source/.test(check.message)), true);
 
   const brokenManager = createServiceManager({
     config,

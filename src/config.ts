@@ -10,6 +10,8 @@ export type WidgetMode = "off" | "changes" | "full";
 export type ShellMode = "full" | "read-only" | "off";
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+const DEFAULT_MCP_SESSION_IDLE_TTL_SECONDS = 30 * 60;
+const DEFAULT_MCP_SESSION_CLEANUP_INTERVAL_SECONDS = 60;
 
 export interface ServerConfig {
   host: string;
@@ -32,6 +34,8 @@ export interface ServerConfig {
   skillPaths: string[];
   agentDir: string;
   logging: LoggingConfig;
+  mcpSessionIdleTtlSeconds: number;
+  mcpSessionCleanupIntervalSeconds: number;
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -273,6 +277,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     logging: parseLoggingConfig(env),
+    mcpSessionIdleTtlSeconds: parsePositiveInteger(
+      env.DEVSPACE_MCP_SESSION_IDLE_TTL_SECONDS,
+      DEFAULT_MCP_SESSION_IDLE_TTL_SECONDS,
+      "DEVSPACE_MCP_SESSION_IDLE_TTL_SECONDS",
+    ),
+    mcpSessionCleanupIntervalSeconds: parsePositiveInteger(
+      env.DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS,
+      DEFAULT_MCP_SESSION_CLEANUP_INTERVAL_SECONDS,
+      "DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS",
+    ),
   };
 }
 

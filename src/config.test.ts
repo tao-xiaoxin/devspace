@@ -108,6 +108,8 @@ assert.deepEqual(loadConfig(baseEnv).oauth.allowedRedirectHosts, [
 ]);
 assert.equal(loadConfig(baseEnv).oauth.accessTokenTtlSeconds, 3600);
 assert.equal(loadConfig(baseEnv).oauth.refreshTokenTtlSeconds, 2592000);
+assert.equal(loadConfig(baseEnv).mcpSessionIdleTtlSeconds, 1800);
+assert.equal(loadConfig(baseEnv).mcpSessionCleanupIntervalSeconds, 60);
 
 assert.deepEqual(
   loadConfig({ ...baseEnv, DEVSPACE_OAUTH_SCOPES: "devspace,admin" }).oauth.scopes,
@@ -129,6 +131,14 @@ assert.equal(
   240,
 );
 assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_IDLE_TTL_SECONDS: "120" }).mcpSessionIdleTtlSeconds,
+  120,
+);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS: "15" }).mcpSessionCleanupIntervalSeconds,
+  15,
+);
+assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_OAUTH_STATE_PATH: "~/custom-devspace-oauth.json" }).oauth.statePath,
   resolve(homedir(), "custom-devspace-oauth.json"),
 );
@@ -144,6 +154,18 @@ assert.throws(
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS: "0" }),
   /Invalid DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS: 0/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_IDLE_TTL_SECONDS: "0" }),
+  /Invalid DEVSPACE_MCP_SESSION_IDLE_TTL_SECONDS: 0/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS: "-1" }),
+  /Invalid DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS: -1/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS: "1.5" }),
+  /Invalid DEVSPACE_MCP_SESSION_CLEANUP_INTERVAL_SECONDS: 1.5/,
 );
 
 assert.equal(loadConfig(baseEnv).publicBaseUrl, "http://127.0.0.1:7676");

@@ -11,19 +11,29 @@ export interface McpSessionEntry<TTransport extends McpSessionTransport> {
   inFlightRequests: number;
 }
 
+export interface McpSessionSnapshot<TTransport extends McpSessionTransport> extends McpSessionEntry<TTransport> {
+  sessionId: string;
+}
+
 export interface McpSessionRemovalEvent {
   sessionId: string;
   reason: McpSessionCloseReason;
   createdAtMs: number;
   lastActivityAtMs: number;
   inFlightRequests: number;
+  idleDurationMs: number;
   activeSessionCount: number;
+}
+
+export interface McpSessionCloseErrorEvent extends McpSessionRemovalEvent {
+  error: unknown;
 }
 
 export interface McpSessionRegistryOptions {
   idleTtlMs: number;
   now?: () => number;
   onRemoved?: (event: McpSessionRemovalEvent) => void;
+  onCloseError?: (event: McpSessionCloseErrorEvent) => void;
 }
 
 export class McpSessionRegistry<TTransport extends McpSessionTransport> {
@@ -57,6 +67,10 @@ export class McpSessionRegistry<TTransport extends McpSessionTransport> {
     return entry;
   }
 
+  get(sessionId: string): McpSessionEntry<TTransport> | undefined {
+    return this.sessions.get(sessionId);
+  }
+
   beginRequest(sessionId: string): McpSessionEntry<TTransport> | undefined {
     const entry = this.sessions.get(sessionId);
     if (!entry) return undefined;
@@ -75,26 +89,28 @@ export class McpSessionRegistry<TTransport extends McpSessionTransport> {
   }
 
   remove(sessionId: string, reason: McpSessionCloseReason): McpSessionEntry<TTransport> | undefined {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return undefined;
-
-    this.sessions.delete(sessionId);
-    this.options.onRemoved?.({
-      sessionId,
-      reason,
-      createdAtMs: entry.createdAtMs,
-      lastActivityAtMs: entry.lastActivityAtMs,
-      inFlightRequests: entry.inFlightRequests,
-      activeSessionCount: this.sessions.size,
-    });
-    return entry;
+    const snapshot = this.removeSnapshot(sessionId, reason);
+    return snapshot?.entry;
   }
 
   async close(sessionId: string, reason: McpSessionCloseReason): Promise<boolean> {
-    const entry = this.remove(sessionId, reason);
-    if (!entry) return false;
+    const snapshot = this.removeSnapshot(sessionId, reason);
+    if (!snapshot) return false;
 
-    await entry.transport.close();
+    try {
+      await snapshot.entry.transport.close();
+    } catch (error) {
+      this.options.onCloseError?.({
+        sessionId,
+        reason,
+        createdAtMs: snapshot.entry.createdAtMs,
+        lastActivityAtMs: snapshot.entry.lastActivityAtMs,
+        inFlightRequests: snapshot.entry.inFlightRequests,
+        idleDurationMs: snapshot.idleDurationMs,
+        activeSessionCount: snapshot.activeSessionCount,
+        error,
+      });
+    }
     return true;
   }
 
@@ -122,5 +138,34 @@ export class McpSessionRegistry<TTransport extends McpSessionTransport> {
       }
     }
     return closed;
+  }
+
+  private removeSnapshot(
+    sessionId: string,
+    reason: McpSessionCloseReason,
+  ): {
+    entry: McpSessionEntry<TTransport>;
+    activeSessionCount: number;
+    idleDurationMs: number;
+  } | undefined {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+
+    this.sessions.delete(sessionId);
+    const idleDurationMs = Math.max(0, this.now() - entry.lastActivityAtMs);
+    this.options.onRemoved?.({
+      sessionId,
+      reason,
+      createdAtMs: entry.createdAtMs,
+      lastActivityAtMs: entry.lastActivityAtMs,
+      inFlightRequests: entry.inFlightRequests,
+      idleDurationMs,
+      activeSessionCount: this.sessions.size,
+    });
+    return {
+      entry,
+      activeSessionCount: this.sessions.size,
+      idleDurationMs,
+    };
   }
 }

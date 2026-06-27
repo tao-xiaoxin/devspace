@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
+import type { Server as HttpServer } from "node:http";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -43,6 +44,15 @@ const require = createRequire(import.meta.url);
 const PACKAGE_VERSION = (require("../package.json") as { version: string }).version;
 const SUPPORTED_NODE_RANGE = ">=20.12 <27";
 const CLI_ENTRYPOINT = fileURLToPath(import.meta.url);
+
+async function closeHttpServer(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
 
 async function main(argv: string[]): Promise<void> {
   assertSupportedNode();
@@ -261,11 +271,17 @@ async function serve(args: string[] = []): Promise<void> {
   });
 
   const shutdown = () => {
-    tunnel?.stop();
-    httpServer.close(() => {
-      close();
-      process.exit(0);
-    });
+    void (async () => {
+      tunnel?.stop();
+      try {
+        await closeHttpServer(httpServer);
+        await close();
+        process.exit(0);
+      } catch (error) {
+        console.error(error);
+        process.exit(1);
+      }
+    })();
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);

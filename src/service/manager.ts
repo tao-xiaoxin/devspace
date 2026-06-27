@@ -676,9 +676,9 @@ function cliEntrypointDoctorCheck(
 ): ServiceDoctorResult["checks"][number] | undefined {
   if (cliHealth.sourceBound) {
     return {
-      level: cliHealth.managedExists ? "warn" : "error",
+      level: cliHealth.managedExists ? "info" : "error",
       message: cliHealth.managedExists
-        ? `Current DevSpace CLI is running from source. The managed service will bind to ${cliHealth.managedEntrypoint}.`
+        ? `Current DevSpace CLI is running from source. Managed service entrypoint is ${cliHealth.managedEntrypoint}.`
         : (cliHealth.message ?? "Current DevSpace CLI is running from source, but the built service entrypoint is missing."),
     };
   }

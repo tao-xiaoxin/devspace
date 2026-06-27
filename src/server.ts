@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Server as HttpServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,11 @@ import {
   commandPreview,
   sessionIdPrefix,
 } from "./logger.js";
+import {
+  McpSessionRegistry,
+  type McpSessionCloseErrorEvent,
+  type McpSessionRemovalEvent,
+} from "./mcp-session-registry.js";
 import {
   editFileTool,
   findFilesTool,
@@ -99,7 +105,7 @@ const SHELL_TOOL_ANNOTATIONS = {
 interface RunningServer {
   app: ReturnType<typeof createMcpExpressApp>;
   config: ServerConfig;
-  close(): void;
+  close(): Promise<void>;
 }
 
 interface WorkspaceAppManifestEntry {
@@ -196,6 +202,14 @@ interface ToolLogFields {
   durationMs: number;
   error?: string;
 }
+
+type AuthFailureReason =
+  | "missing_bearer"
+  | "malformed_bearer"
+  | "invalid_or_expired_access_token"
+  | "insufficient_scope"
+  | "invalid_oauth_resource"
+  | "auth_internal_error";
 
 function toolNamesFor(config: ServerConfig): ToolNames {
   return config.toolNaming === "short"
@@ -446,6 +460,137 @@ function requestLogFields(req: Request, config: ServerConfig): Record<string, un
     referer: req.header("referer"),
     contentLength: req.header("content-length"),
   };
+}
+
+function classifyAuthorizationHeader(authHeader: string | undefined): AuthFailureReason | undefined {
+  if (!authHeader?.trim()) return "missing_bearer";
+  return /^\s*Bearer\s+\S+\s*$/iu.test(authHeader) ? undefined : "malformed_bearer";
+}
+
+function authenticateHeaderErrorCode(res: Response): string | undefined {
+  const header = res.getHeader("WWW-Authenticate");
+  const value = Array.isArray(header)
+    ? header.join(", ")
+    : typeof header === "string"
+      ? header
+      : undefined;
+  return value?.match(/error="([^"]+)"/u)?.[1];
+}
+
+function classifyAuthFailure(
+  authHeader: string | undefined,
+  res: Response,
+  error?: unknown,
+): AuthFailureReason {
+  if (error) return "auth_internal_error";
+
+  const headerClassification = classifyAuthorizationHeader(authHeader);
+  if (headerClassification) return headerClassification;
+
+  const errorCode = authenticateHeaderErrorCode(res);
+  if (res.statusCode >= 500) return "auth_internal_error";
+  if (res.statusCode === 403 || errorCode === "insufficient_scope") {
+    return "insufficient_scope";
+  }
+  return "invalid_or_expired_access_token";
+}
+
+function logAuthDenied(
+  config: ServerConfig,
+  req: Request,
+  requestId: string | undefined,
+  reason: AuthFailureReason,
+): void {
+  logEvent(config.logging, "warn", "auth_denied", {
+    requestId,
+    method: req.method,
+    path: requestPath(req),
+    reason,
+    ...requestLogFields(req, config),
+  });
+}
+
+function sessionLifecycleLogFields(
+  event: Pick<
+    McpSessionRemovalEvent,
+    "sessionId" | "createdAtMs" | "lastActivityAtMs" | "idleDurationMs" | "inFlightRequests" | "activeSessionCount" | "reason"
+  >,
+): Record<string, unknown> {
+  return {
+    sessionIdPrefix: sessionIdPrefix(event.sessionId),
+    activeSessionCount: event.activeSessionCount,
+    createdAtMs: event.createdAtMs,
+    lastActivityAtMs: event.lastActivityAtMs,
+    idleDurationMs: event.idleDurationMs,
+    inFlightRequests: event.inFlightRequests,
+    reason: event.reason,
+  };
+}
+
+function logSessionRemoved(config: ServerConfig, event: McpSessionRemovalEvent): void {
+  const lifecycleEvent =
+    event.reason === "idle_expired"
+      ? "mcp_session_idle_expired"
+      : event.reason === "server_shutdown"
+        ? "mcp_session_shutdown_cleanup"
+        : "mcp_session_closed";
+  logEvent(config.logging, "info", lifecycleEvent, sessionLifecycleLogFields(event));
+}
+
+function logSessionCloseError(config: ServerConfig, event: McpSessionCloseErrorEvent): void {
+  logEvent(config.logging, "warn", "mcp_session_close_error", {
+    ...sessionLifecycleLogFields(event),
+    error: event.error instanceof Error ? event.error.message : String(event.error),
+  });
+}
+
+function attachSessionRequestFinalizer(
+  registry: McpSessionRegistry<Transport>,
+  sessionId: string,
+  res: Response,
+): () => void {
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+    res.off("finish", finalize);
+    res.off("close", finalize);
+    registry.endRequest(sessionId);
+  };
+
+  res.on("finish", finalize);
+  res.on("close", finalize);
+  return finalize;
+}
+
+function runBearerAuthMiddleware(
+  middleware: ReturnType<typeof requireBearerAuth>,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const settle = (handler: () => void) => {
+      if (settled) return;
+      settled = true;
+      res.off("finish", handleResponseEnd);
+      res.off("close", handleResponseEnd);
+      handler();
+    };
+    const handleResponseEnd = () => {
+      settle(resolve);
+    };
+    const handleNext = (error?: unknown) => {
+      settle(() => {
+        if (error) reject(error);
+        else resolve();
+      });
+    };
+
+    res.on("finish", handleResponseEnd);
+    res.on("close", handleResponseEnd);
+    middleware(req, res, handleNext);
+  });
 }
 
 function logToolCall(config: ServerConfig, fields: ToolLogFields): void {
@@ -3087,7 +3232,6 @@ export function createServer(config = loadConfig()): RunningServer {
     host: config.host,
     ...(allowedHosts ? { allowedHosts } : {}),
   });
-  const transports = new Map<string, Transport>();
   const mcpUrl = new URL(config.mcpPath, config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
@@ -3099,6 +3243,25 @@ export function createServer(config = loadConfig()): RunningServer {
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
+  let closed = false;
+  const sessionRegistry = new McpSessionRegistry<Transport>({
+    idleTtlMs: config.mcpSessionIdleTtlSeconds * 1_000,
+    onRemoved: (event) => {
+      logSessionRemoved(config, event);
+    },
+    onCloseError: (event) => {
+      logSessionCloseError(config, event);
+    },
+  });
+  let cleanupInProgress = false;
+  const cleanupTimer = setInterval(() => {
+    if (cleanupInProgress || closed) return;
+    cleanupInProgress = true;
+    void sessionRegistry.closeIdle().finally(() => {
+      cleanupInProgress = false;
+    });
+  }, config.mcpSessionCleanupIntervalSeconds * 1_000);
+  cleanupTimer.unref?.();
 
   if (config.logging.trustProxy) {
     // DevSpace only trusts the loopback Nginx proxy in front of the local server.
@@ -3171,24 +3334,31 @@ export function createServer(config = loadConfig()): RunningServer {
   app.all(config.mcpPath, async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
+    const authHeader = req.header("authorization");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
+    let finalizeTrackedRequest: (() => void) | undefined;
 
-    await new Promise<void>((resolve, reject) => {
-      bearerAuth(req, res, (error?: unknown) => {
-        if (error) reject(error);
-        else resolve();
+    try {
+      await runBearerAuthMiddleware(bearerAuth, req, res);
+    } catch (error) {
+      logAuthDenied(config, req, requestId, classifyAuthFailure(authHeader, res, error));
+      logEvent(config.logging, "error", "mcp_request_error", {
+        requestId,
+        sessionIdPrefix: sessionIdPrefix(sessionId),
+        error: error instanceof Error ? error.message : String(error),
       });
-    });
-    if (res.headersSent) return;
+      if (!res.headersSent) {
+        sendJsonRpcError(res, 500, -32603, "Internal server error");
+      }
+      return;
+    }
+    if (res.headersSent) {
+      logAuthDenied(config, req, requestId, classifyAuthFailure(authHeader, res));
+      return;
+    }
 
     if (!req.auth?.resource || !checkResourceAllowed({ requestedResource: req.auth.resource, configuredResource: resourceServerUrl })) {
-      logEvent(config.logging, "warn", "auth_denied", {
-        requestId,
-        method: req.method,
-        path: requestPath(req),
-        reason: "invalid_oauth_resource",
-        ...requestLogFields(req, config),
-      });
+      logAuthDenied(config, req, requestId, "invalid_oauth_resource");
       sendJsonRpcError(res, 401, -32001, "Unauthorized");
       return;
     }
@@ -3205,19 +3375,26 @@ export function createServer(config = loadConfig()): RunningServer {
       let transport: Transport | undefined;
 
       if (sessionId) {
-        transport = transports.get(sessionId);
-        if (!transport) {
+        const entry = sessionRegistry.beginRequest(sessionId);
+        if (!entry) {
           sendJsonRpcError(res, 404, -32000, "Unknown MCP session");
           return;
         }
+        transport = entry.transport;
+        finalizeTrackedRequest = attachSessionRequestFinalizer(sessionRegistry, sessionId, res);
       } else if (initializeRequest) {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
-            if (transport) transports.set(newSessionId, transport);
+            if (!transport) return;
+            const entry = sessionRegistry.register(newSessionId, transport);
             logEvent(config.logging, "info", "mcp_session_created", {
               requestId,
               sessionIdPrefix: sessionIdPrefix(newSessionId),
+              activeSessionCount: sessionRegistry.size,
+              createdAtMs: entry.createdAtMs,
+              lastActivityAtMs: entry.lastActivityAtMs,
+              inFlightRequests: entry.inFlightRequests,
               ...requestLogFields(req, config),
             });
           },
@@ -3225,12 +3402,7 @@ export function createServer(config = loadConfig()): RunningServer {
 
         transport.onclose = () => {
           const closedSessionId = transport?.sessionId;
-          if (closedSessionId) {
-            transports.delete(closedSessionId);
-            logEvent(config.logging, "info", "mcp_session_closed", {
-              sessionIdPrefix: sessionIdPrefix(closedSessionId),
-            });
-          }
+          if (closedSessionId) sessionRegistry.remove(closedSessionId, "transport_closed");
         };
 
         const server = createMcpServer(config, workspaces, reviewCheckpoints, workspaceStore);
@@ -3242,8 +3414,10 @@ export function createServer(config = loadConfig()): RunningServer {
 
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
+      finalizeTrackedRequest?.();
       logEvent(config.logging, "error", "mcp_request_error", {
         requestId,
+        sessionIdPrefix: sessionIdPrefix(sessionId),
         error: error instanceof Error ? error.message : String(error),
       });
       if (!res.headersSent) {
@@ -3252,13 +3426,14 @@ export function createServer(config = loadConfig()): RunningServer {
     }
   });
 
-  let closed = false;
   return {
     app,
     config,
-    close: () => {
+    close: async () => {
       if (closed) return;
       closed = true;
+      clearInterval(cleanupTimer);
+      await sessionRegistry.closeAll("server_shutdown");
       oauthProvider.close();
       workspaceStore.close?.();
     },
@@ -3651,6 +3826,15 @@ async function isMainModule(): Promise<boolean> {
   return modulePath === entrypointPath;
 }
 
+async function closeHttpServer(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 if (await isMainModule()) {
   const { app, config, close } = createServer();
   const httpServer = app.listen(config.port, config.host, () => {
@@ -3666,10 +3850,16 @@ if (await isMainModule()) {
   });
 
   const shutdown = () => {
-    httpServer.close(() => {
-      close();
-      process.exit(0);
-    });
+    void (async () => {
+      try {
+        await closeHttpServer(httpServer);
+        await close();
+        process.exit(0);
+      } catch (error) {
+        console.error(error);
+        process.exit(1);
+      }
+    })();
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
